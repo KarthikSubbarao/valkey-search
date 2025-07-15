@@ -134,22 +134,22 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
 }
 
 // Handle non-vector queries by processing the neighbors and replying with the attribute contents.
-void SerializeNonVectorNeighbors(RedisModuleCtx *ctx,
+void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
                                 std::deque<indexes::Neighbor> &neighbors,
                                 const query::VectorSearchParameters &parameters) {
     const size_t available_results = neighbors.size();
-    RedisModule_ReplyWithArray(ctx, 2 * available_results + 1);
+    ValkeyModule_ReplyWithArray(ctx, 2 * available_results + 1);
     // First element is the count of available results.
-    RedisModule_ReplyWithLongLong(ctx, available_results);
+    ValkeyModule_ReplyWithLongLong(ctx, available_results);
     for (const auto& neighbor : neighbors) {
         // Document ID
-        RedisModule_ReplyWithString(ctx, vmsdk::MakeUniqueRedisString(*neighbor.external_id).get());
+        ValkeyModule_ReplyWithString(ctx, vmsdk::MakeUniqueValkeyString(*neighbor.external_id).get());
         const auto& contents = neighbor.attribute_contents.value();
         // Fields and values as a flat array
-        RedisModule_ReplyWithArray(ctx, 2 * contents.size());
+        ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
         for (const auto &attribute_content : contents) {
-            RedisModule_ReplyWithString(ctx, attribute_content.second.GetIdentifier());
-            RedisModule_ReplyWithString(ctx, attribute_content.second.value.get());
+            ValkeyModule_ReplyWithString(ctx, attribute_content.second.GetIdentifier());
+            ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
         }
     }
 }
