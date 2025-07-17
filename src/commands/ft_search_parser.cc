@@ -215,17 +215,12 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
              "exceed "
           << max_ef_runtime_value << ".";
     }
-    if (parameters.ef.has_value() && parameters.ef <= 0) {
-      return absl::InvalidArgumentError("`EF` value must be positive");
-    }
-    if (parameters.k <= 0) {
-      return absl::InvalidArgumentError("k must be positive");
-    }
-  auto max_knn_value = options::GetMaxKnn().GetValue();
-  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
-      << "KNN parameter must be a positive integer greater than 0 and cannot "
-         "exceed "
-      << max_knn_value << ".";
+    auto max_knn_value = options::GetMaxKnn().GetValue();
+    VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(parameters.k, 1, max_knn_value))
+        << "KNN parameter must be a positive integer greater than 0 and cannot "
+          "exceed "
+        << max_knn_value << ".";
+  }
   if (parameters.timeout_ms > kMaxTimeoutMs) {
     return absl::InvalidArgumentError(
         absl::StrCat(kTimeoutParam,
