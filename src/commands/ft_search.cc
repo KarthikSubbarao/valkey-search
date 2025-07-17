@@ -135,7 +135,7 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
 
 // Handle non-vector queries by processing the neighbors and replying with the attribute contents.
 void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
-                                std::deque<indexes::Neighbor> &neighbors,
+                                const std::deque<indexes::Neighbor> &neighbors,
                                 const query::VectorSearchParameters &parameters) {
     const size_t available_results = neighbors.size();
     ValkeyModule_ReplyWithArray(ctx, 2 * available_results + 1);
