@@ -37,9 +37,44 @@
 
 #ifndef RAX_ALLOC_H
 #define RAX_ALLOC_H
-#include "zmalloc.h"
-#define rax_malloc zmalloc
-#define rax_realloc zrealloc
-#define rax_free zfree
-#define rax_ptr_alloc_size zmalloc_size
+#include <stdlib.h>
+#include <string.h>
+
+// Always use manual size tracking for accurate accounting.
+// malloc_usable_size() returns the actual usable size which can be larger
+// than requested due to allocator overhead, causing accounting errors in rax.
+
+static inline void* rax_malloc_impl(size_t size) {
+    size_t* ptr = (size_t*)malloc(sizeof(size_t) + size);
+    if (!ptr) return NULL;
+    *ptr = size;
+    return (void*)(ptr + 1);
+}
+
+static inline void* rax_realloc_impl(void* ptr, size_t size) {
+    if (!ptr) return rax_malloc_impl(size);
+    size_t* real_ptr = ((size_t*)ptr) - 1;
+    size_t* new_ptr = (size_t*)realloc(real_ptr, sizeof(size_t) + size);
+    if (!new_ptr) return NULL;
+    *new_ptr = size;
+    return (void*)(new_ptr + 1);
+}
+
+static inline void rax_free_impl(void* ptr) {
+    if (!ptr) return;
+    size_t* real_ptr = ((size_t*)ptr) - 1;
+    free(real_ptr);
+}
+
+static inline size_t rax_ptr_alloc_size_impl(void* ptr) {
+    if (!ptr) return 0;
+    size_t* real_ptr = ((size_t*)ptr) - 1;
+    return *real_ptr;
+}
+
+#define rax_malloc rax_malloc_impl
+#define rax_realloc rax_realloc_impl
+#define rax_free rax_free_impl
+#define rax_ptr_alloc_size rax_ptr_alloc_size_impl
+
 #endif

@@ -142,7 +142,7 @@ std::unique_ptr<indexes::text::TextIterator> TermPredicate::BuildTextIterator(
       key_iterators;
   while (!word_iter.Done()) {
     if (word_iter.GetWord() == GetTextString()) {
-      key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+      key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
     }
     word_iter.Next();
   }
@@ -163,7 +163,7 @@ std::unique_ptr<indexes::text::TextIterator> PrefixPredicate::BuildTextIterator(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   while (!word_iter.Done()) {
-    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+    key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
     word_iter.Next();
   }
   // We do not perform positional checks on the initial background search.
@@ -187,7 +187,7 @@ std::unique_ptr<indexes::text::TextIterator> SuffixPredicate::BuildTextIterator(
                       indexes::text::kWordExpansionInlineCapacity>
       key_iterators;
   while (!word_iter.Done()) {
-    key_iterators.emplace_back(word_iter.GetTarget()->GetKeyIterator());
+    key_iterators.emplace_back(word_iter.GetPostingsTarget()->GetKeyIterator());
     word_iter.Next();
   }
   // We do not perform positional checks on the initial background search.

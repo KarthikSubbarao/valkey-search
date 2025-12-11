@@ -23,7 +23,7 @@
 #include "src/indexes/text/invasive_ptr.h"
 #include "src/indexes/text/lexer.h"
 #include "src/indexes/text/posting.h"
-#include "src/indexes/text/radix_tree.h"
+#include "src/indexes/text/rax_wrapper.h"
 
 struct sb_stemmer;
 
@@ -36,7 +36,7 @@ using TokenPositions =
 class TextIndexSchema;
 
 // Function to get current TextIndexSchema for accessing metadata
-TextIndexSchema* GetTextIndexSchema();
+TextIndexSchema *GetTextIndexSchema();
 
 // FT.INFO counters for text info fields and memory pools
 struct TextIndexMetadata {
@@ -65,30 +65,39 @@ class TextIndex {
 
  public:
   explicit TextIndex(bool suffix);
-  RadixTree<InvasivePtr<Postings>>& GetPrefix();
-  const RadixTree<InvasivePtr<Postings>>& GetPrefix() const;
-  std::optional<std::reference_wrapper<RadixTree<InvasivePtr<Postings>>>>
-  GetSuffix();
-  std::optional<std::reference_wrapper<const RadixTree<InvasivePtr<Postings>>>>
-  GetSuffix() const;
+  ~TextIndex();
+
+  // TextIndex is not copyable (contains unique_ptr and Rax which is not
+  // copyable)
+  TextIndex(const TextIndex &) = delete;
+  TextIndex &operator=(const TextIndex &) = delete;
+
+  // TextIndex is movable
+  TextIndex(TextIndex &&) = default;
+  TextIndex &operator=(TextIndex &&) = default;
+
+  Rax &GetPrefix();
+  const Rax &GetPrefix() const;
+  std::optional<std::reference_wrapper<Rax>> GetSuffix();
+  std::optional<std::reference_wrapper<const Rax>> GetSuffix() const;
 
  private:
-  RadixTree<InvasivePtr<Postings>> prefix_tree_;
-  std::unique_ptr<RadixTree<InvasivePtr<Postings>>> suffix_tree_;
+  Rax prefix_tree_;
+  std::unique_ptr<Rax> suffix_tree_;
 };
 
 class TextIndexSchema {
  public:
-  TextIndexSchema(data_model::Language language, const std::string& punctuation,
+  TextIndexSchema(data_model::Language language, const std::string &punctuation,
                   bool with_offsets,
-                  const std::vector<std::string>& stop_words);
+                  const std::vector<std::string> &stop_words);
 
-  absl::StatusOr<bool> StageAttributeData(const InternedStringPtr& key,
+  absl::StatusOr<bool> StageAttributeData(const InternedStringPtr &key,
                                           absl::string_view data,
                                           size_t text_field_number, bool stem,
                                           size_t min_stem_size, bool suffix);
-  void CommitKeyData(const InternedStringPtr& key);
-  void DeleteKeyData(const InternedStringPtr& key);
+  void CommitKeyData(const InternedStringPtr &key);
+  void DeleteKeyData(const InternedStringPtr &key);
 
   uint8_t AllocateTextFieldNumber() { return num_text_fields_++; }
   bool HasTextOffsets() const { return with_offsets_; }
@@ -97,7 +106,7 @@ class TextIndexSchema {
   Lexer GetLexer() const { return lexer_; }
 
   // Access to metadata for memory pool usage
-  TextIndexMetadata& GetMetadata() { return metadata_; }
+  TextIndexMetadata &GetMetadata() { return metadata_; }
 
   // Enable suffix trie.
   void EnableSuffix() {
@@ -162,7 +171,7 @@ class TextIndexSchema {
   // Thread-safe accessor for per-key text indexes. Executes the provided
   // function while holding the mutex lock, ensuring safe concurrent access.
   template <typename Func>
-  auto WithPerKeyTextIndexes(Func&& func)
+  auto WithPerKeyTextIndexes(Func &&func)
       -> decltype(func(per_key_text_indexes_)) {
     std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
     return func(per_key_text_indexes_);

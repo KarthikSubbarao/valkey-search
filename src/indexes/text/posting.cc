@@ -183,8 +183,7 @@ void Postings::InsertKey(const Key& key, PositionMap&& pos_map) {
 
 // Remove a document key and all its positions
 void Postings::RemoveKey(const Key& key) {
-  auto node = key_to_positions_.extract(key);
-  if (node.empty()) return;
+  key_to_positions_.extract(key);
 }
 
 // Get total number of document keys
