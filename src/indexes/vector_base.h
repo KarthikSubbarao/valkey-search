@@ -260,6 +260,12 @@ class VectorBase : public IndexBase, public hnswlib::VectorTracker {
 
 class PrefilterEvaluator : public query::Evaluator {
  public:
+  PrefilterEvaluator() : text_index_(nullptr) {}
+  
+  explicit PrefilterEvaluator(
+      const valkey_search::indexes::text::TextIndex* text_index)
+      : text_index_(text_index) {}
+      
   bool Evaluate(const query::Predicate& predicate,
                 const InternedStringPtr& key);
   const InternedStringPtr& GetTargetKey() const override {
@@ -267,6 +273,11 @@ class PrefilterEvaluator : public query::Evaluator {
     return *key_;
   }
   bool IsPrefilterEvaluator() const override { return true; }
+  
+  // Add setter to update text index without recreating evaluator
+  void SetTextIndex(const valkey_search::indexes::text::TextIndex* text_index) {
+    text_index_ = text_index;
+  }
 
  private:
   query::EvaluationResult EvaluateTags(
@@ -275,7 +286,8 @@ class PrefilterEvaluator : public query::Evaluator {
       const query::NumericPredicate& predicate) override;
   query::EvaluationResult EvaluateText(const query::TextPredicate& predicate,
                                        bool require_positions) override;
-  const InternedStringPtr* key_{nullptr};
+  const valkey_search::indexes::text::TextIndex* text_index_;
+  const InternedStringPtr* key_{nullptr};  
 };
 
 }  // namespace valkey_search::indexes

@@ -679,8 +679,8 @@ TEST_P(FetchFilteredKeysTest, ParseParams) {
     entries_fetchers.push(std::make_unique<TestedNumericEntriesFetcher>(
         entries_range, std::make_pair(key_range.first, key_range.second)));
   }
-  auto results =
-      CalcBestMatchingPrefilteredKeys(params, entries_fetchers, vector_index);
+  auto results = CalcBestMatchingPrefilteredKeys(params, entries_fetchers,
+                                                 vector_index, 0);
   auto neighbors = vector_index->CreateReply(results).value();
   EXPECT_EQ(neighbors.size(), test_case.expected_keys.size());
   for (auto it = neighbors.begin(); it != neighbors.end(); ++it) {

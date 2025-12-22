@@ -93,6 +93,7 @@ struct SearchParameters {
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
+  bool skip_prefilter_eval{true};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   struct ParseTimeVariables {
@@ -162,7 +163,7 @@ std::priority_queue<std::pair<float, hnswlib::labeltype>>
 CalcBestMatchingPrefilteredKeys(
     const SearchParameters& parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>>& entries_fetchers,
-    indexes::VectorBase* vector_index);
+    indexes::VectorBase* vector_index, size_t qualified_entries);
 
 }  // namespace valkey_search::query
 #endif  // VALKEYSEARCH_SRC_QUERY_SEARCH_H_

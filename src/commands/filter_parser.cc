@@ -397,6 +397,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
     return results;
   }
   filter_identifiers_.clear();
+  query_operations_ = QueryOperations::kNone;
   pos_ = 0;
   VMSDK_ASSIGN_OR_RETURN(auto parse_result, ParseExpression(0));
   if (!IsEnd()) {
@@ -404,6 +405,7 @@ absl::StatusOr<FilterParseResults> FilterParser::Parse() {
   }
   results.root_predicate = std::move(parse_result.prev_predicate);
   results.filter_identifiers.swap(filter_identifiers_);
+  results.query_operations = query_operations_;
   // Only generate query syntax tree output if debug logging is enabled.
   if (valkey_search::options::GetLogLevel().GetValue() ==
       static_cast<int>(LogLevel::kDebug)) {
@@ -450,6 +452,9 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     auto* composed =
         dynamic_cast<query::ComposedPredicate*>(prev_predicate.get());
     composed->AddChild(std::move(new_predicate));
+    // Technically, this is not needed because this block is only entered
+    // when we are extending an existing AND node.
+    query_operations_ |= QueryOperations::kContainsAnd;
     return prev_predicate;
   }
   // Flatten OR nodes when not_rightmost_bracket is true at the same bracket
@@ -468,6 +473,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
     for (auto& child : children) {
       new_children.push_back(std::move(child));
     }
+    query_operations_ |= QueryOperations::kContainsOr;
     return std::make_unique<query::ComposedPredicate>(
         logical_operator, std::move(new_children), options_.slop,
         options_.inorder);
@@ -477,6 +483,12 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::WrapPredicate(
   std::vector<std::unique_ptr<query::Predicate>> children;
   children.push_back(std::move(prev_predicate));
   children.push_back(std::move(new_predicate));
+  // This is important to track for query operations:
+  if (logical_operator == query::LogicalOperator::kAnd) {
+    query_operations_ |= QueryOperations::kContainsAnd;
+  } else {
+    query_operations_ |= QueryOperations::kContainsOr;
+  }
   return std::make_unique<query::ComposedPredicate>(
       logical_operator, std::move(children), options_.slop, options_.inorder);
 };
@@ -812,6 +824,7 @@ absl::StatusOr<std::unique_ptr<query::Predicate>> FilterParser::ParseTextTokens(
     for (auto& term : terms) {
       children.push_back(std::move(term));
     }
+    query_operations_ |= QueryOperations::kContainsAnd;
     pred = std::make_unique<query::ComposedPredicate>(
         query::LogicalOperator::kAnd, std::move(children), slop, inorder);
     node_count_ += terms.size() + 1;

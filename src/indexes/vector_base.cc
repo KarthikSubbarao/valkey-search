@@ -105,16 +105,9 @@ query::EvaluationResult PrefilterEvaluator::EvaluateNumeric(
 query::EvaluationResult PrefilterEvaluator::EvaluateText(
     const query::TextPredicate &predicate, bool require_positions) {
   CHECK(key_);
-  // Evaluate using per-key text index
-  auto text_index_schema = predicate.GetTextIndexSchema();
-  auto &per_key_indexes = text_index_schema->GetPerKeyTextIndexes();
-  auto it = per_key_indexes.find(*key_);
-  if (it == per_key_indexes.end()) {
-    VMSDK_LOG(WARNING, nullptr)
-        << "Target key not found in index for pre-filter evaluation";
-    return query::EvaluationResult(false);
-  }
-  return predicate.Evaluate(it->second, *key_, require_positions);
+  CHECK(text_index_) << "Text index should be cached by caller";
+  
+  return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 
 template <typename T>
