@@ -32,6 +32,7 @@
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
 #include "vmsdk/src/managed_pointers.h"
+#include "vmsdk/src/pooled_memory.h"
 #include "vmsdk/src/thread_pool.h"
 
 namespace valkey_search::query {
@@ -70,6 +71,10 @@ inline std::ostream& operator<<(std::ostream& os, const ReturnAttribute& r) {
 }
 
 struct SearchParameters {
+  //
+  // This must be first (first constructed, last destructed)
+  //
+  mutable vmsdk::PooledMemory query_pool;
   mutable cancel::Token cancellation_token;
   virtual ~SearchParameters() = default;
   uint32_t db_num{0};
@@ -89,11 +94,11 @@ struct SearchParameters {
   uint64_t timeout_ms;
   bool no_content{false};
   FilterParseResults filter_parse_results;
-  std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};
   std::optional<uint32_t> slop;
   bool verbatim{false};
   bool skip_prefilter_eval{true};
+  std::pmr::vector<ReturnAttribute> return_attributes{&query_pool};
   coordinator::IndexFingerprintVersion index_fingerprint_version;
   uint64_t slot_fingerprint;
   struct ParseTimeVariables {
@@ -130,10 +135,7 @@ struct SearchParameters {
   // classes if needed. The default implementation returns false.
   virtual bool RequiresCompleteResults() const { return false; }
   SearchParameters(uint64_t timeout, grpc::CallbackServerContext* context,
-                   uint32_t db_num)
-      : timeout_ms(timeout),
-        cancellation_token(cancel::Make(timeout, context)),
-        db_num_(db_num) {}
+                   uint32_t db_num);
 };
 
 // Indicates the range of neighbors to serialize in a search response.

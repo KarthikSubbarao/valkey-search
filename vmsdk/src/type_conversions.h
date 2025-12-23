@@ -13,6 +13,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <string>
 #include <system_error>  // NOLINT(build/c++11)
 
@@ -52,6 +53,11 @@ inline absl::StatusOr<absl::string_view> To(absl::string_view str) {
 template <>
 inline absl::StatusOr<std::string> To(absl::string_view str) {
   return std::string(str);
+}
+
+template <>
+inline absl::StatusOr<std::pmr::string> To(absl::string_view str) {
+  return std::pmr::string(str);
 }
 
 static inline bool IsNumeric(absl::string_view str) {
