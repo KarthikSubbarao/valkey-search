@@ -78,12 +78,13 @@ EvaluationResult TermPredicate::Evaluate(
       !key_iter.ContainsFields(field_mask)) {
     return EvaluationResult(false);
   }
-  absl::InlinedVector<indexes::text::Postings::KeyIterator,
-                      indexes::text::kWordExpansionInlineCapacity>
-      key_iterators;
-  key_iterators.emplace_back(std::move(key_iter));
+  // If positions not required, return early without creating iterator
+  if (!require_positions) {
+    return EvaluationResult(true);
+  }
+  // Create TermIterator only when positions are required
   auto iterator = std::make_unique<indexes::text::TermIterator>(
-      std::move(key_iterators), field_mask, nullptr, require_positions);
+      std::move(key_iter), field_mask, nullptr, require_positions);
   return BuildTextEvaluationResult(std::move(iterator), require_positions);
 }
 

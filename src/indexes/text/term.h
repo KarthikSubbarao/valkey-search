@@ -45,6 +45,11 @@ class TermIterator : public TextIterator {
           key_iterators,
       const FieldMaskPredicate field_mask,
       const InternedStringSet* untracked_keys, const bool require_positions);
+  // Single KeyIterator constructor for optimization
+  TermIterator(
+      Postings::KeyIterator&& key_iterator,
+      const FieldMaskPredicate field_mask,
+      const InternedStringSet* untracked_keys, const bool require_positions);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration

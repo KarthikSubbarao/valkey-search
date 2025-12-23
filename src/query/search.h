@@ -145,17 +145,17 @@ struct SerializationRange {
   size_t count() const { return end_index - start_index; }
 };
 
-// Wrapper for search results that trims the neighbor deque based on query type
+// Wrapper for search results that trims the neighbor vector based on query type
 struct SearchResult {
   size_t total_count;
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
   // True if neighbors were limited using LIMIT count with a buffer multiplier.
   bool is_limited_with_buffer;
   // True if neighbors were offset using LIMIT first_index.
   bool is_offsetted;
 
   // Constructor with automatic trimming based on query requirements
-  SearchResult(size_t total_count, std::deque<indexes::Neighbor> neighbors,
+  SearchResult(size_t total_count, std::vector<indexes::Neighbor> neighbors,
                const SearchParameters& parameters);
   // Get the range of neighbors to serialize in response.
   SerializationRange GetSerializationRange(
@@ -163,7 +163,7 @@ struct SearchResult {
 
  private:
   bool RetainAllNeighbors(const SearchParameters& parameters);
-  void TrimResults(std::deque<indexes::Neighbor>& neighbors,
+  void TrimResults(std::vector<indexes::Neighbor>& neighbors,
                    const SearchParameters& parameters);
 };
 
@@ -179,8 +179,8 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          SearchResponseCallback callback,
                          SearchMode search_mode);
 
-absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
-    absl::StatusOr<std::deque<indexes::Neighbor>> results,
+absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
+    absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters& parameters);
 
 class Predicate;
@@ -191,7 +191,7 @@ size_t EvaluateFilterAsPrimary(
     bool negate);
 
 // Defined in the header to support testing
-absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
+absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase* vector_index, const SearchParameters& parameters);
 
 std::priority_queue<std::pair<float, hnswlib::labeltype>>

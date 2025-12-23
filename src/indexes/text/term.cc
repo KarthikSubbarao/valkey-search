@@ -26,6 +26,21 @@ TermIterator::TermIterator(
   }
 }
 
+// Single KeyIterator constructor for optimization
+TermIterator::TermIterator(
+    Postings::KeyIterator&& key_iterator,
+    const FieldMaskPredicate query_field_mask,
+    const InternedStringSet* untracked_keys, const bool require_positions)
+    : query_field_mask_(query_field_mask),
+      key_iterators_{std::move(key_iterator)},
+      current_position_(std::nullopt),
+      current_field_mask_(0ULL),
+      untracked_keys_(untracked_keys),
+      require_positions_(require_positions) {
+  // Prime the first key and position if they exist.
+  TermIterator::NextKey();
+}
+
 FieldMaskPredicate TermIterator::QueryFieldMask() const {
   return query_field_mask_;
 }

@@ -136,7 +136,7 @@ struct SearchPartitionResultsTracker {
     }
   }
 
-  void AddResults(std::deque<indexes::Neighbor> &neighbors) {
+  void AddResults(std::vector<indexes::Neighbor> &neighbors) {
     absl::MutexLock lock(&mutex);
     for (auto &neighbor : neighbors) {
       AddResult(neighbor);
@@ -170,7 +170,8 @@ struct SearchPartitionResultsTracker {
     } else if (reached_oom) {
       result = absl::ResourceExhaustedError(kOOMMsg);
     } else {
-      std::deque<indexes::Neighbor> neighbors;
+      std::vector<indexes::Neighbor> neighbors;
+      neighbors.reserve(results.size());
       while (!results.empty()) {
         neighbors.push_back(
             std::move(const_cast<indexes::Neighbor &>(results.top())));

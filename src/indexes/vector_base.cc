@@ -251,9 +251,10 @@ absl::StatusOr<bool> VectorBase::ModifyRecord(const InternedStringPtr &key,
 }
 
 template <typename T>
-absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
+absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply(
     std::priority_queue<std::pair<T, hnswlib::labeltype>> &knn_res) {
-  std::deque<Neighbor> ret;
+  std::vector<Neighbor> ret;
+  ret.reserve(knn_res.size());
   while (!knn_res.empty()) {
     auto &ele = knn_res.top();
     auto vector_key = GetKeyDuringSearch(ele.second);
@@ -262,7 +263,7 @@ absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply(
       continue;
     }
     // Sorting in asc order.
-    ret.emplace_front(Neighbor{vector_key.value(), ele.first});
+    ret.emplace(ret.begin(), Neighbor{vector_key.value(), ele.first});
     knn_res.pop();
   }
   return ret;
@@ -564,7 +565,7 @@ template void VectorBase::Init<float>(
     int dimensions, data_model::DistanceMetric distance_metric,
     std::unique_ptr<hnswlib::SpaceInterface<float>> &space);
 
-template absl::StatusOr<std::deque<Neighbor>> VectorBase::CreateReply<float>(
+template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
 }  // namespace indexes
 

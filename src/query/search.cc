@@ -68,7 +68,7 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
   query::Predicate *filter_predicate_;
   indexes::VectorBase *vector_index_;
 };
-absl::StatusOr<std::deque<indexes::Neighbor>> PerformVectorSearch(
+absl::StatusOr<std::vector<indexes::Neighbor>> PerformVectorSearch(
     indexes::VectorBase *vector_index, const SearchParameters &parameters) {
   std::unique_ptr<InlineVectorFilter> inline_filter;
   if (parameters.filter_parse_results.root_predicate != nullptr) {
@@ -295,8 +295,8 @@ std::string StringFormatVector(std::vector<char> vector) {
   return absl::StrCat("[", absl::StrJoin(float_strings, ","), "]");
 }
 
-absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
-    absl::StatusOr<std::deque<indexes::Neighbor>> results,
+absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
+    absl::StatusOr<std::vector<indexes::Neighbor>> results,
     const SearchParameters &parameters) {
   if (!results.ok()) {
     return results;
@@ -400,13 +400,15 @@ absl::StatusOr<std::deque<indexes::Neighbor>> MaybeAddIndexedContent(
   return results;
 }
 
-absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
+absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
   size_t qualified_entries = EvaluateFilterAsPrimary(
       parameters.filter_parse_results.root_predicate.get(), entries_fetchers,
       false);
-  std::deque<indexes::Neighbor> neighbors;
+  std::vector<indexes::Neighbor> neighbors;
+  // Use a much larger buffer to prevent reallocations - the estimate can be very inaccurate
+  neighbors.reserve(50000);
   auto results_appender =
       [&neighbors, &parameters](
           const InternedStringPtr &key,
@@ -443,7 +445,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> SearchNonVectorQuery(
   return neighbors;
 }
 
-absl::StatusOr<std::deque<indexes::Neighbor>> DoSearch(
+absl::StatusOr<std::vector<indexes::Neighbor>> DoSearch(
     const SearchParameters &parameters, SearchMode search_mode) {
   // Handle OOM for search requests, defends against request
   // coming from the coordinator
@@ -509,7 +511,7 @@ bool ShouldReturnNoResults(const SearchParameters &parameters) {
 }
 
 SearchResult::SearchResult(size_t total_count,
-                           std::deque<indexes::Neighbor> neighbors,
+                           std::vector<indexes::Neighbor> neighbors,
                            const SearchParameters &parameters)
     : total_count(total_count),
       is_limited_with_buffer(false),
@@ -527,7 +529,7 @@ SearchResult::SearchResult(size_t total_count,
 }
 
 // Apply limiting in background thread if possible.
-void SearchResult::TrimResults(std::deque<indexes::Neighbor> &neighbors,
+void SearchResult::TrimResults(std::vector<indexes::Neighbor> &neighbors,
                                const SearchParameters &parameters) {
   // Calculate max_needed for consistent vector/non-vector handling
   SerializationRange range = GetSerializationRange(parameters);
