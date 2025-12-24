@@ -88,6 +88,14 @@ class PredicateEvaluator : public query::Evaluator {
       : records_(records), text_index_(text_index), target_key_(target_key) {}
 
   const InternedStringPtr &GetTargetKey() const override { return target_key_; }
+  
+  // Override pooled memory methods for PredicateEvaluator specific behavior
+  void SetPooledMemory(vmsdk::PooledMemory* pool) { 
+    pool_ = pool; 
+  }
+  vmsdk::PooledMemory* GetPooledMemory() const { 
+    return pool_; 
+  }
 
   EvaluationResult EvaluateTags(const query::TagPredicate &predicate) override {
     auto identifier = predicate.GetRetainedIdentifier();
@@ -126,7 +134,7 @@ class PredicateEvaluator : public query::Evaluator {
     if (!text_index_) {
       return EvaluationResult(false);
     }
-    return predicate.Evaluate(*text_index_, target_key_, require_positions);
+    return predicate.Evaluate(*text_index_, target_key_, require_positions, pool_);
   }
 
  private:
@@ -154,11 +162,15 @@ bool VerifyFilter(const query::Predicate *predicate, const RecordsMap &records,
             text_index = &it->second;
           }
           PredicateEvaluator evaluator(records, text_index, target_key);
+          // Set pooled memory if available from parameters
+          evaluator.SetPooledMemory(&parameters.query_pool);
           EvaluationResult result = predicate->Evaluate(evaluator);
           return result.matches;
         });
   }
   PredicateEvaluator evaluator(records);
+  // Set pooled memory if available from parameters
+  evaluator.SetPooledMemory(&parameters.query_pool);
   EvaluationResult result = predicate->Evaluate(evaluator);
   return result.matches;
 }

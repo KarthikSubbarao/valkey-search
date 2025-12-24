@@ -19,6 +19,7 @@
 #include "src/indexes/text/text_iterator.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/type_conversions.h"
+#include "vmsdk/src/pooled_memory.h"
 
 namespace valkey_search::indexes {
 class Text;
@@ -79,6 +80,13 @@ class Evaluator {
   // Access target key for proximity validation (only for Text)
   virtual const InternedStringPtr& GetTargetKey() const = 0;
   virtual bool IsPrefilterEvaluator() const { return false; }
+  
+  // Pooled memory management
+  void SetPooledMemory(vmsdk::PooledMemory* pool) { pool_ = pool; }
+  vmsdk::PooledMemory* GetPooledMemory() const { return pool_; }
+  
+ protected:
+  vmsdk::PooledMemory* pool_ = nullptr;
 };
 
 class Predicate;
@@ -176,7 +184,8 @@ class TextPredicate : public Predicate {
   // Evaluate against per-key TextIndex
   virtual EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
-      const InternedStringPtr& target_key, bool require_positions) const = 0;
+      const InternedStringPtr& target_key, bool require_positions,
+      vmsdk::PooledMemory* pool) const = 0;
   virtual std::shared_ptr<indexes::text::TextIndexSchema> GetTextIndexSchema()
       const = 0;
   virtual const FieldMaskPredicate GetFieldMask() const = 0;
@@ -200,7 +209,8 @@ class TermPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key,
-      bool require_positions) const override;
+      bool require_positions,
+      vmsdk::PooledMemory* pool) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -228,7 +238,8 @@ class PrefixPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key,
-      bool require_positions) const override;
+      bool require_positions,
+      vmsdk::PooledMemory* pool) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -254,7 +265,8 @@ class SuffixPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key,
-      bool require_positions) const override;
+      bool require_positions,
+      vmsdk::PooledMemory* pool) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -280,7 +292,8 @@ class InfixPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key,
-      bool require_positions) const override;
+      bool require_positions,
+      vmsdk::PooledMemory* pool) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }
@@ -307,7 +320,8 @@ class FuzzyPredicate : public TextPredicate {
   EvaluationResult Evaluate(
       const valkey_search::indexes::text::TextIndex& text_index,
       const InternedStringPtr& target_key,
-      bool require_positions) const override;
+      bool require_positions,
+      vmsdk::PooledMemory* pool) const override;
   std::unique_ptr<indexes::text::TextIterator> BuildTextIterator(
       const void* fetcher) const override;
   const FieldMaskPredicate GetFieldMask() const override { return field_mask_; }

@@ -107,7 +107,7 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
   CHECK(key_);
   CHECK(text_index_) << "Text index should be cached by caller";
   
-  return predicate.Evaluate(*text_index_, *key_, require_positions);
+  return predicate.Evaluate(*text_index_, *key_, require_positions, pool_);
 }
 
 template <typename T>

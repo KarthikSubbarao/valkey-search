@@ -39,6 +39,7 @@
 #include "third_party/hnswlib/iostream.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
+#include "vmsdk/src/pooled_memory.h"
 
 namespace valkey_search::indexes {
 
@@ -277,6 +278,14 @@ class PrefilterEvaluator : public query::Evaluator {
   // Add setter to update text index without recreating evaluator
   void SetTextIndex(const valkey_search::indexes::text::TextIndex* text_index) {
     text_index_ = text_index;
+  }
+  
+  // Override pooled memory methods for PrefilterEvaluator specific behavior
+  void SetPooledMemory(vmsdk::PooledMemory* pool) { 
+    pool_ = pool; 
+  }
+  vmsdk::PooledMemory* GetPooledMemory() const { 
+    return pool_; 
   }
 
  private:

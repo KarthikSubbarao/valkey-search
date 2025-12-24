@@ -61,6 +61,9 @@ class InlineVectorFilter : public hnswlib::BaseFilterFunctor {
       return false;
     }
     indexes::PrefilterEvaluator evaluator;
+    // Set pooled memory if available from the search parameters
+    // Note: In this context, we don't have direct access to pooled memory
+    // but the evaluator can work without it for basic filtering
     return evaluator.Evaluate(*filter_predicate_, *key);
   }
 
@@ -215,6 +218,8 @@ void EvaluatePrefilteredKeys(
   bool enable_prefilter_evaluation =
       options::GetEnablePrefilterEval().GetValue();
   indexes::PrefilterEvaluator evaluator;
+  // Set pooled memory from search parameters if available
+  evaluator.SetPooledMemory(&parameters.query_pool);
   // Get per-key text indexes directly since we have reader lock
   const InternedStringNodeHashMap<valkey_search::indexes::text::TextIndex>
       *per_key_indexes = nullptr;

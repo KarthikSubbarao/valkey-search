@@ -62,7 +62,8 @@ EvaluationResult TermPredicate::Evaluate(Evaluator& evaluator) const {
 // TermPredicate: Exact term match in the text index.
 EvaluationResult TermPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const InternedStringPtr& target_key, bool require_positions) const {
+    const InternedStringPtr& target_key, bool require_positions,
+    vmsdk::PooledMemory* pool) const {
   uint64_t field_mask = field_mask_;
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   if (word_iter.Done()) {
@@ -103,7 +104,8 @@ EvaluationResult PrefixPredicate::Evaluate(Evaluator& evaluator) const {
 // PrefixPredicate: Matches all terms that start with the given prefix.
 EvaluationResult PrefixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const InternedStringPtr& target_key, bool require_positions) const {
+    const InternedStringPtr& target_key, bool require_positions,
+    vmsdk::PooledMemory* pool) const {
   uint64_t field_mask = field_mask_;
   auto word_iter = text_index.GetPrefix().GetWordIterator(term_);
   absl::InlinedVector<indexes::text::Postings::KeyIterator,
@@ -146,7 +148,8 @@ EvaluationResult SuffixPredicate::Evaluate(Evaluator& evaluator) const {
 // SuffixPredicate: Matches terms that end with the given suffix
 EvaluationResult SuffixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const InternedStringPtr& target_key, bool require_positions) const {
+    const InternedStringPtr& target_key, bool require_positions,
+    vmsdk::PooledMemory* pool) const {
   uint64_t field_mask = field_mask_;
   auto suffix_opt = text_index.GetSuffix();
   if (!suffix_opt.has_value()) {
@@ -193,7 +196,8 @@ EvaluationResult InfixPredicate::Evaluate(Evaluator& evaluator) const {
 
 EvaluationResult InfixPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const InternedStringPtr& target_key, bool require_positions) const {
+    const InternedStringPtr& target_key, bool require_positions,
+    vmsdk::PooledMemory* pool) const {
   // TODO: Implement infix evaluation
   CHECK(false) << "Infix Search - Not implemented";
   return EvaluationResult(false);
@@ -214,7 +218,8 @@ EvaluationResult FuzzyPredicate::Evaluate(Evaluator& evaluator) const {
 
 EvaluationResult FuzzyPredicate::Evaluate(
     const valkey_search::indexes::text::TextIndex& text_index,
-    const InternedStringPtr& target_key, bool require_positions) const {
+    const InternedStringPtr& target_key, bool require_positions,
+    vmsdk::PooledMemory* pool) const {
   // TODO: Implement fuzzy evaluation
   CHECK(false) << "Fuzzy Search - Not implemented";
   return EvaluationResult(false);
