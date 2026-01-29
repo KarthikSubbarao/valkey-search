@@ -258,7 +258,7 @@ ProximityIterator::FindViolatingIterator() {
       size_t curr_idx = pos_with_idx_[i].second;
       size_t next_idx = pos_with_idx_[i + 1].second;
       int32_t distance =
-          (positions_[next_idx].start - positions_[curr_idx].start) - 1;
+          (positions_[next_idx].start - positions_[curr_idx].end) - 1;
       current_slop += std::max(0, distance);
     }
     if (current_slop > *slop_) {

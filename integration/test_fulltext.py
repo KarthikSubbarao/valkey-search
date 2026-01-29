@@ -1152,11 +1152,15 @@ class TestFullText(ValkeySearchTestCaseDebugMode):
         # Create index with text fields
         client.execute_command("FT.CREATE", "idx", "ON", "HASH", "SCHEMA",
                             "content", "TEXT", "NOSTEM")
-        client.execute_command("HSET", "doc:1", "content", "apple red blue banana yellow green grape purple orange cherry pink violet one two three four five six seven eight nine ten zero 1 2 3 4 5 6 7 8 9 0")
+        client.execute_command("HSET", "doc:1", "content", "apple red blue banana yellow green grape purple orange cherry pink violet one two three four five six seven eight nine ten zero 1 2 3 4 5 6 7 8 9 0 land sea ocean carrot jump quiet build shark onion")
         # Wait for index backfill to complete
         IndexingTestHelper.wait_for_backfill_complete_on_node(client, "idx")
         for compat_mode in ["YES", "NO"]:
             assert client.execute_command("CONFIG SET search.proximity-inorder-compat-mode", compat_mode) == b'OK'
+            result = client.execute_command("FT.SEARCH", "idx", "sea ((ocean carrot) | (jump quiet)) onion", "DIALECT", "2", "SLOP", "3")
+            assert result[0] == 0
+            result = client.execute_command("FT.SEARCH", "idx", "sea ((ocean carrot) | (jump quiet)) onion", "DIALECT", "2", "SLOP", "4")
+            assert result[0] == 1
             # Test slop compat searches
             # (1) Slop=x, Inorder=true in flat/nested queries with single terms
             # (1a) AND
