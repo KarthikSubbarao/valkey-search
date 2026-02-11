@@ -49,6 +49,7 @@ class OrProximityIterator : public TextIterator {
   bool SeekForwardPosition(Position target_position) override;
   FieldMaskPredicate CurrentFieldMask() const override;
   bool IsIteratorValid() const override;
+  bool HasPosition() const;
 
  private:
   absl::InlinedVector<std::unique_ptr<TextIterator>,

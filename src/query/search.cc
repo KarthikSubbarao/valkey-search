@@ -29,6 +29,7 @@
 #include "src/indexes/numeric.h"
 #include "src/indexes/tag.h"
 #include "src/indexes/text.h"
+#include "src/indexes/text/hybrid_iterator.h"
 #include "src/indexes/text/orproximity.h"
 #include "src/indexes/text/proximity.h"
 #include "src/indexes/text/text_fetcher.h"
@@ -148,13 +149,11 @@ inline PredicateType EvaluateAsComposedPredicate(
 }
 
 // Helper fn to identify if query is not fully solved after the entries fetcher
-// search, meaning it requires prefilter evaluation Prefiltering is needed when
-// query contains an AND with numeric or tag predicates.
+// search, meaning it requires prefilter evaluation
 inline bool IsUnsolvedQuery(QueryOperations query_operations) {
-  return query_operations & (QueryOperations::kContainsNumeric |
-                             QueryOperations::kContainsTag) &&
-         (query_operations & QueryOperations::kContainsAnd || (query_operations & QueryOperations::kContainsOr && query_operations & QueryOperations::kContainsNegate)) ||
-          query_operations & QueryOperations::kContainsNegate && query_operations & QueryOperations::kContainsAnd && query_operations & QueryOperations::kContainsText;
+  // Hybrid iterators now solve text+numeric/tag cases
+  // Only unsolved if negation is involved
+  return query_operations & QueryOperations::kContainsNegate;
 }
 
 // Helper fn to identify if deduplication is needed.
@@ -163,12 +162,11 @@ inline bool IsUnsolvedQuery(QueryOperations query_operations) {
 inline bool NeedsDeduplication(QueryOperations query_operations) {
   bool has_or = query_operations & QueryOperations::kContainsOr;
   bool has_tag = query_operations & QueryOperations::kContainsTag;
-  bool has_negate_or = query_operations & QueryOperations::kContainsNegate && query_operations & QueryOperations::kContainsAnd;
-  return has_or || has_tag || has_negate_or;
+  return has_or || has_tag;
 }
 
 // Builds TextIterator for text predicates. Returns pair of iterator and
-// estimated size.
+// estimated size. Also handles hybrid cases with numeric/tag.
 std::pair<std::unique_ptr<indexes::text::TextIterator>, size_t>
 BuildTextIterator(const Predicate *predicate, bool negate,
                   bool require_positions) {
@@ -185,30 +183,60 @@ BuildTextIterator(const Predicate *predicate, bool negate,
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
+      std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> non_text_fetchers;
       size_t min_size = SIZE_MAX;
+      size_t non_text_min_size = SIZE_MAX;
       for (const auto &child : composed_predicate->GetChildren()) {
         auto [iter, size] =
             BuildTextIterator(child.get(), negate, child_require_positions);
         if (iter) {
           iterators.push_back(std::move(iter));
           min_size = std::min(min_size, size);
+        } else {
+          // Non-text predicate - get fetcher
+          if (child->GetType() == PredicateType::kNumeric) {
+            auto num_pred = dynamic_cast<const NumericPredicate *>(child.get());
+            auto fetcher = num_pred->GetIndex()->Search(*num_pred, negate);
+            non_text_min_size = std::min(non_text_min_size, fetcher->Size());
+            non_text_fetchers.push(std::move(fetcher));
+          } else if (child->GetType() == PredicateType::kTag) {
+            auto tag_pred = dynamic_cast<const TagPredicate *>(child.get());
+            auto fetcher = tag_pred->GetIndex()->Search(*tag_pred, negate);
+            non_text_min_size = std::min(non_text_min_size, fetcher->Size());
+            non_text_fetchers.push(std::move(fetcher));
+          }
         }
       }
-      // The Composed AND only has non text predicates, return null
-      // to have the caller handle it.
+      // All non-text - return null
       if (iterators.empty()) return {nullptr, 0};
+      
       bool skip_positional = !child_require_positions;
-      size_t total_size = min_size == SIZE_MAX ? 0 : min_size;
-      return {
-          std::make_unique<indexes::text::ProximityIterator>(
-              std::move(iterators), slop, inorder, nullptr, skip_positional),
-          total_size};
+      size_t total_size = std::min(min_size == SIZE_MAX ? SIZE_MAX : min_size,
+                                   non_text_min_size == SIZE_MAX ? SIZE_MAX : non_text_min_size);
+      if (total_size == SIZE_MAX) total_size = 0;
+      
+      // Build base iterator
+      std::unique_ptr<indexes::text::TextIterator> base_iter;
+      if (iterators.size() == 1) {
+        base_iter = std::move(iterators[0]);
+      } else {
+        base_iter = std::make_unique<indexes::text::ProximityIterator>(
+            std::move(iterators), slop, inorder, nullptr, skip_positional);
+      }
+      
+      // Wrap with hybrid if needed
+      if (!non_text_fetchers.empty()) {
+        return {std::make_unique<indexes::text::ComposedANDIterator>(
+                    std::move(base_iter), std::move(non_text_fetchers)),
+                total_size};
+      }
+      return {std::move(base_iter), total_size};
     } else {
       absl::InlinedVector<std::unique_ptr<indexes::text::TextIterator>,
                           indexes::text::kProximityTermsInlineCapacity>
           iterators;
+      std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> non_text_fetchers;
       size_t total_size = 0;
-      bool has_non_text = false;
       for (const auto &child : composed_predicate->GetChildren()) {
         auto [iter, size] =
             BuildTextIterator(child.get(), negate, child_require_positions);
@@ -216,15 +244,42 @@ BuildTextIterator(const Predicate *predicate, bool negate,
           iterators.push_back(std::move(iter));
           total_size += size;
         } else {
-          has_non_text = true;
+          // Non-text predicate
+          if (child->GetType() == PredicateType::kNumeric) {
+            auto num_pred = dynamic_cast<const NumericPredicate *>(child.get());
+            auto fetcher = num_pred->GetIndex()->Search(*num_pred, negate);
+            total_size += fetcher->Size();
+            non_text_fetchers.push(std::move(fetcher));
+          } else if (child->GetType() == PredicateType::kTag) {
+            auto tag_pred = dynamic_cast<const TagPredicate *>(child.get());
+            auto fetcher = tag_pred->GetIndex()->Search(*tag_pred, negate);
+            total_size += fetcher->Size();
+            non_text_fetchers.push(std::move(fetcher));
+          } else {
+            // Negation or other - cannot build iterator
+            return {nullptr, 0};
+          }
         }
       }
-      // If the Composed OR has any non text predicate, we cannot
-      // build a text iterator.
-      if (iterators.empty() || has_non_text) return {nullptr, 0};
-      return {std::make_unique<indexes::text::OrProximityIterator>(
-                  std::move(iterators), nullptr),
-              total_size};
+      // All non-text - return null
+      if (iterators.empty()) return {nullptr, 0};
+      
+      // Build base iterator
+      std::unique_ptr<indexes::text::TextIterator> base_iter;
+      if (iterators.size() == 1) {
+        base_iter = std::move(iterators[0]);
+      } else {
+        base_iter = std::make_unique<indexes::text::OrProximityIterator>(
+            std::move(iterators), nullptr);
+      }
+      
+      // Wrap with hybrid if needed
+      if (!non_text_fetchers.empty()) {
+        return {std::make_unique<indexes::text::ComposedORIterator>(
+                    std::move(base_iter), std::move(non_text_fetchers)),
+                total_size};
+      }
+      return {std::move(base_iter), total_size};
     }
   }
   if (predicate->GetType() == PredicateType::kText) {
@@ -236,8 +291,12 @@ BuildTextIterator(const Predicate *predicate, bool negate,
     return {text_predicate->BuildTextIterator(fetcher), size};
   }
   if (predicate->GetType() == PredicateType::kNegate) {
-    // Cannot build text iterator for negation - return null to force
-    // NegateEntriesFetcher usage in EvaluateFilterAsPrimary
+    auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
+    // Try to build iterator for inner predicate
+    auto [inner_iter, inner_size] = BuildTextIterator(
+        negate_predicate->GetPredicate(), !negate, require_positions);
+    // If inner is text-only (has iterator), we cannot negate at iterator level
+    // Return null to force NegateEntriesFetcher usage
     return {nullptr, 0};
   }
   // Numeric/Tag
@@ -251,18 +310,19 @@ size_t EvaluateFilterAsPrimary(
     const IndexSchema* index_schema) {
   if (predicate->GetType() == PredicateType::kComposedAnd ||
       predicate->GetType() == PredicateType::kComposedOr) {
-    auto composed_predicate =
-        dynamic_cast<const ComposedPredicate *>(predicate);
+    // Try to build text iterator (handles text + numeric/tag hybrid)
+    auto [text_iter, size] = BuildTextIterator(predicate, negate, false);
+    if (text_iter) {
+      entries_fetchers.push(
+          std::make_unique<indexes::text::TextIteratorFetcher>(
+              std::move(text_iter), size));
+      return size;
+    }
+    
+    // All non-text predicates - evaluate children
+    auto composed_predicate = dynamic_cast<const ComposedPredicate *>(predicate);
     auto predicate_type = composed_predicate->GetType();
     if (predicate_type == PredicateType::kComposedAnd) {
-      auto [text_iter, size] =
-          BuildTextIterator(composed_predicate, negate, false);
-      if (text_iter) {
-        entries_fetchers.push(
-            std::make_unique<indexes::text::TextIteratorFetcher>(
-                std::move(text_iter), size));
-        return size;
-      }
       size_t min_size = SIZE_MAX;
       std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> best_fetchers;
       for (const auto &child : composed_predicate->GetChildren()) {
@@ -316,11 +376,22 @@ size_t EvaluateFilterAsPrimary(
   }
   if (predicate->GetType() == PredicateType::kNegate) {
     auto negate_predicate = dynamic_cast<const NegatePredicate *>(predicate);
-    // Always use NegateEntriesFetcher - never apply De Morgan's Law
+    // Try to build text iterator for inner predicate first
+    auto [text_iter, text_size] = BuildTextIterator(
+        negate_predicate->GetPredicate(), false, false);
+    
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> inner_fetchers;
-    size_t inner_size = EvaluateFilterAsPrimary(
-        negate_predicate->GetPredicate(), inner_fetchers, false,
-        query_operations, index_schema);
+    if (text_iter) {
+      // Inner is text-only, wrap in TextIteratorFetcher
+      inner_fetchers.push(
+          std::make_unique<indexes::text::TextIteratorFetcher>(
+              std::move(text_iter), text_size));
+    } else {
+      // Inner has non-text predicates, use regular evaluation
+      EvaluateFilterAsPrimary(
+          negate_predicate->GetPredicate(), inner_fetchers, false,
+          query_operations, index_schema);
+    }
 
     CHECK(index_schema != nullptr) << "IndexSchema required for negation";
     auto negate_fetcher = std::make_unique<indexes::NegateEntriesFetcher>(

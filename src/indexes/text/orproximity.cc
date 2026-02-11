@@ -1,5 +1,7 @@
 #include "orproximity.h"
 
+#include "src/indexes/text/hybrid_iterator.h"
+
 namespace valkey_search::indexes::text {
 
 OrProximityIterator::OrProximityIterator(
@@ -192,6 +194,20 @@ FieldMaskPredicate OrProximityIterator::CurrentFieldMask() const {
 bool OrProximityIterator::IsIteratorValid() const {
   return current_key_ && current_position_.has_value() &&
          current_field_mask_ != 0ULL;
+}
+
+bool OrProximityIterator::HasPosition() const {
+  // Check if any child iterator on current key has position
+  for (size_t idx : current_key_indices_) {
+    if (auto* hybrid = dynamic_cast<ComposedANDIterator*>(iters_[idx].get())) {
+      if (hybrid->HasPosition()) return true;
+    } else if (auto* hybrid_or = dynamic_cast<ComposedORIterator*>(iters_[idx].get())) {
+      if (hybrid_or->HasPosition()) return true;
+    } else {
+      return true; // Regular text iterator
+    }
+  }
+  return false;
 }
 
 }  // namespace valkey_search::indexes::text

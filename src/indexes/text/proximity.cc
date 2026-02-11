@@ -1,5 +1,6 @@
 #include "proximity.h"
 
+#include "src/indexes/text/hybrid_iterator.h"
 #include "vmsdk/src/module_config.h"
 
 namespace valkey_search::options {
@@ -363,6 +364,23 @@ bool ProximityIterator::SeekForwardPosition(Position target_position) {
 FieldMaskPredicate ProximityIterator::CurrentFieldMask() const {
   CHECK(current_field_mask_ != 0ULL);
   return current_field_mask_;
+}
+
+bool ProximityIterator::HasPosition() const {
+  if (skip_positional_checks_) {
+    // Check if any child has position
+    for (auto& iter : iters_) {
+      if (auto* hybrid = dynamic_cast<ComposedANDIterator*>(iter.get())) {
+        if (hybrid->HasPosition()) return true;
+      } else if (auto* hybrid_or = dynamic_cast<ComposedORIterator*>(iter.get())) {
+        if (hybrid_or->HasPosition()) return true;
+      } else {
+        return true; // Regular text iterator always has position
+      }
+    }
+    return false;
+  }
+  return current_position_.has_value();
 }
 
 }  // namespace valkey_search::indexes::text
