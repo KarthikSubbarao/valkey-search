@@ -74,7 +74,7 @@ class SchemaManager {
   uint64_t GetCorpusNumTextItems() const;
 
   uint64_t GetTotalIndexedDocuments() const;
-  uint64_t GetTotalTextMemoryUsage() const;
+
 
   bool IsIndexingInProgress() const;
   IndexSchema::Stats::ResultCnt<uint64_t> AccumulateIndexSchemaResults(

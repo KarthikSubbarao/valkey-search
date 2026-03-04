@@ -13,6 +13,7 @@
 #include "libstemmer.h"
 #include "src/valkey_search_options.h"
 #include "vmsdk/src/memory_allocation.h"
+#include "vmsdk/src/status/status_macros.h"
 namespace valkey_search::indexes::text {
 
 namespace {
@@ -60,32 +61,6 @@ InvasivePtr<Postings> RemoveKeyFromPostings(
     existing_postings.Clear();
   }
   return existing_postings;
-}
-
-// Factory for target mutate callback with memory tracking and new target
-// copying to the outer scope
-template <typename Target, typename MutateFn>
-std::function<void *(void *)> CreateTargetMutateFn(
-    MemoryPool &memory_pool, MutateFn mutate_fn,
-    InvasivePtr<Target> &updated_target) {
-  return [&updated_target, &memory_pool,
-          mutate_fn = std::move(mutate_fn)](void *old_val) -> void * {
-    NestedMemoryScope scope{memory_pool};
-
-    // Take ownership of the existing target reference. Nullptr is
-    // handled gracefully as a no-op.
-    auto existing = InvasivePtr<Target>::AdoptRaw(
-        static_cast<InvasivePtrRaw<Target>>(old_val));
-
-    // Mutate the target
-    InvasivePtr<Target> new_target = mutate_fn(std::move(existing));
-
-    // Copy the new target reference to the outer scope
-    updated_target = new_target;
-
-    // Pass ownership of the new target reference to the tree
-    return static_cast<void *>(std::move(new_target).ReleaseRaw());
-  };
 }
 
 // Factory for target set callback
@@ -167,34 +142,29 @@ TextIndexSchema::TextIndexSchema(data_model::Language language,
 absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     const InternedStringPtr &key, absl::string_view data,
     size_t text_field_number, bool stem, bool suffix) {
-  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
-
   // Get or create stem mappings for this key if stemming is enabled
   absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>
       *stem_mappings_ptr = nullptr;
   if (stem) {
     std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
-    stem_mappings_ptr = &in_progress_stem_mappings_[key];
+    auto& stem_map = in_progress_stem_mappings_[key];
+    stem_map.reserve(64);  // Reserve capacity to prevent rehashing
+    stem_mappings_ptr = &stem_map;
   }
 
   // Tokenize and collect stem mappings
-  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
-
-  if (!tokens.ok()) {
-    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
-      return false;  // UTF-8 errors → hash_indexing_failures
-    }
-    return tokens.status();
-  }
+  VMSDK_ASSIGN_OR_RETURN(auto tokens, lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr));
 
   // Map tokens -> positions -> field-masks
   TokenPositions *token_positions;
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
-    token_positions = &in_progress_key_updates_[key];
+    auto& token_map = in_progress_key_updates_[key];
+    token_map.reserve(tokens.size());  // Reserve based on token count
+    token_positions = &token_map;
   }
-  for (uint32_t i = 0; i < tokens->size(); ++i) {
-    const auto &token = tokens.value()[i];
+  for (uint32_t i = 0; i < tokens.size(); ++i) {
+    const auto &token = tokens[i];
     uint32_t position =
         with_offsets_ ? i
                       : 0;  // If positional info is disabled we default to 0
@@ -209,8 +179,6 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
 }
 
 void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
-  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
-
   // Retrieve the key's staged data
   TokenPositions token_positions;
   {
@@ -241,10 +209,14 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     const std::string &token = entry.first;
     auto &[pos_map, suffix] = entry.second;
 
-    const std::optional<std::string> reverse_token =
-        suffix ? std::optional<std::string>(
-                     std::string(token.rbegin(), token.rend()))
-               : std::nullopt;
+    // Avoid string allocation for reverse token when not needed
+    std::string reverse_token_storage;
+    const std::string* reverse_token_ptr = nullptr;
+    if (suffix) {
+      reverse_token_storage.reserve(token.size());
+      std::reverse_copy(token.begin(), token.end(), std::back_inserter(reverse_token_storage));
+      reverse_token_ptr = &reverse_token_storage;
+    }
 
     // Update metadata from PositionMap
     metadata_.total_positions += pos_map.size();
@@ -261,13 +233,13 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     InvasivePtr<Postings> updated_target;
 
     // Pass the FlatPositionMap to AddKeyToPostings
-    auto target_add_fn = CreateTargetMutateFn(
-        metadata_.posting_memory_pool_,
-        [&](InvasivePtr<Postings> existing) {
-          return AddKeyToPostings(std::move(existing), key, flat_map,
-                                  &metadata_);
-        },
-        updated_target);
+    auto target_add_fn = [&](void *old_val) -> void * {
+      auto existing = InvasivePtr<Postings>::AdoptRaw(
+          static_cast<InvasivePtrRaw<Postings>>(old_val));
+      auto new_target = AddKeyToPostings(std::move(existing), key, flat_map, &metadata_);
+      updated_target = new_target;
+      return static_cast<void *>(std::move(new_target).ReleaseRaw());
+    };
     auto target_set_fn = CreateTargetSetFn(updated_target);
 
     // Update the postings object for the token in the schema-level index with
@@ -277,9 +249,9 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       text_index_->GetPrefix().MutateTarget(
           token, target_add_fn,
           ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
-      if (suffix) {
+      if (suffix && reverse_token_ptr) {
         text_index_->GetSuffix().value().get().MutateTarget(
-            *reverse_token, target_set_fn,
+            *reverse_token_ptr, target_set_fn,
             ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
       }
     }
@@ -287,8 +259,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     // Put the token in the per-key index pointing to the same shared postings
     // object
     key_index.GetPrefix().MutateTarget(token, target_set_fn);
-    if (suffix) {
-      key_index.GetSuffix().value().get().MutateTarget(*reverse_token,
+    if (suffix && reverse_token_ptr) {
+      key_index.GetSuffix().value().get().MutateTarget(*reverse_token_ptr,
                                                        target_set_fn);
     }
   }
@@ -317,8 +289,6 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
-  NestedMemoryScope scope{metadata_.text_index_memory_pool_};
-
   // Extract the per-key index
   absl::node_hash_map<Key, TextIndex>::node_type node;
   {
@@ -334,12 +304,13 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
   // target_set_fn, so that all trees point to the same postings object
   InvasivePtr<Postings> updated_target;
 
-  auto target_remove_fn = CreateTargetMutateFn(
-      metadata_.posting_memory_pool_,
-      [&](InvasivePtr<Postings> existing) {
-        return RemoveKeyFromPostings(std::move(existing), key, &metadata_);
-      },
-      updated_target);
+  auto target_remove_fn = [&](void *old_val) -> void * {
+    auto existing = InvasivePtr<Postings>::AdoptRaw(
+        static_cast<InvasivePtrRaw<Postings>>(old_val));
+    auto new_target = RemoveKeyFromPostings(std::move(existing), key, &metadata_);
+    updated_target = new_target;
+    return static_cast<void *>(std::move(new_target).ReleaseRaw());
+  };
   auto target_set_fn = CreateTargetSetFn(updated_target);
 
   // Cleanup schema-level text index and stem tree
@@ -402,25 +373,7 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
 }
 
 uint64_t TextIndexSchema::GetPostingsMemoryUsage() const {
-  if (!text_index_) {
-    return 0;
-  }
-  return metadata_.posting_memory_pool_.GetUsage();
-}
-
-uint64_t TextIndexSchema::GetRadixTreeMemoryUsage() const {
-  // TODO: properly implement
-  return GetTotalTextIndexMemoryUsage() - GetPostingsMemoryUsage();
-}
-
-// Note: This is a subset of the memory reported by GetPostingsMemoryUsage(),
-uint64_t TextIndexSchema::GetPositionMemoryUsage() const {
-  uint64_t total_positions = GetTotalPositions();
-  return total_positions * sizeof(uint32_t);
-}
-
-uint64_t TextIndexSchema::GetTotalTextIndexMemoryUsage() const {
-  return metadata_.text_index_memory_pool_.GetUsage();
+  return 0;  // Memory pool tracking removed
 }
 
 std::string TextIndexSchema::GetAllStemVariants(

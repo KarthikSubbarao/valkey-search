@@ -92,6 +92,11 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
   // Get or create the thread-local stemmer for this lexer's language
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
   std::vector<std::string> tokens;
+  tokens.reserve(text.size() / 6);  // Estimate ~6 chars per token
+  
+  std::string word_buffer;
+  word_buffer.reserve(32);  // Reserve for typical word length
+  
   size_t pos = 0;
   while (pos < text.size()) {
     // Skip leading punctuation, but check for backslash escape sequences
@@ -103,7 +108,7 @@ absl::StatusOr<std::vector<std::string>> Lexer::Tokenize(
       pos++;
     }
 
-    std::string word_buffer;
+    word_buffer.clear();  // Reuse buffer instead of creating new string
 
     // Build word, handling backslash escape sequences
     while (pos < text.size()) {
