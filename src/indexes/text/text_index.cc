@@ -372,10 +372,6 @@ uint64_t TextIndexSchema::GetTotalTermFrequency() const {
   return metadata_.total_term_frequency.load();
 }
 
-uint64_t TextIndexSchema::GetPostingsMemoryUsage() const {
-  return 0;  // Memory pool tracking removed
-}
-
 std::string TextIndexSchema::GetAllStemVariants(
     absl::string_view search_term,
     absl::InlinedVector<absl::string_view, kStemVariantsInlineCapacity>

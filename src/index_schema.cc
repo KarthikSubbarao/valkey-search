@@ -1063,10 +1063,6 @@ int IndexSchema::GetTextItemCount() const {
 
 void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   int arrSize = 28;
-  // Debug Text index Memory info fields
-  if (vmsdk::config::IsDebugModeEnabled()) {
-    arrSize += 2;
-  }
   // Text-attribute info fields
   if (text_index_schema_) {
     arrSize += 8;  // punctuation, stop_words, with_offsets, min_stem_size (4
@@ -1112,13 +1108,6 @@ void IndexSchema::RespondWithInfo(ValkeyModuleCtx *ctx) const {
   ValkeyModule_ReplyWithLongLong(
       ctx, text_index_schema_ ? text_index_schema_->GetNumUniqueTerms() : 0);
 
-  // Memory statistics are only shown when debug mode is enabled
-  if (vmsdk::config::IsDebugModeEnabled()) {
-    ValkeyModule_ReplyWithSimpleString(ctx, "posting_sz_bytes");
-    ValkeyModule_ReplyWithLongLong(
-        ctx,
-        text_index_schema_ ? text_index_schema_->GetPostingsMemoryUsage() : 0);
-  }
   // Text Index info fields end
   ValkeyModule_ReplyWithSimpleString(ctx, "hash_indexing_failures");
   ValkeyModule_ReplyWithCString(

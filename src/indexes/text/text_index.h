@@ -201,7 +201,6 @@ class TextIndexSchema {
   uint64_t GetTotalPositions() const;
   uint64_t GetNumUniqueTerms() const;
   uint64_t GetTotalTermFrequency() const;
-  uint64_t GetPostingsMemoryUsage() const;
 
   // Thread-safe accessor for per-key text indexes. Executes the provided
   // function while holding the mutex lock, ensuring safe concurrent access.
