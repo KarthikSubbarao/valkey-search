@@ -147,24 +147,32 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
       *stem_mappings_ptr = nullptr;
   if (stem) {
     std::lock_guard<std::mutex> stem_guard(in_progress_stem_mappings_mutex_);
-    auto& stem_map = in_progress_stem_mappings_[key];
-    stem_map.reserve(64);  // Reserve capacity to prevent rehashing
-    stem_mappings_ptr = &stem_map;
+    // auto& stem_map = in_progress_stem_mappings_[key];
+    // stem_map.reserve(64);  // Reserve capacity to prevent rehashing
+    // stem_mappings_ptr = &stem_map;
+    stem_mappings_ptr = &in_progress_stem_mappings_[key];
   }
 
   // Tokenize and collect stem mappings
-  VMSDK_ASSIGN_OR_RETURN(auto tokens, lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr));
+  auto tokens = lexer_.Tokenize(data, stem, min_stem_size_, stem_mappings_ptr);
+  if (!tokens.ok()) {
+    if (tokens.status().code() == absl::StatusCode::kInvalidArgument) {
+      return false;  // UTF-8 errors → hash_indexing_failures
+    }
+    return tokens.status();
+  }
 
   // Map tokens -> positions -> field-masks
   TokenPositions *token_positions;
   {
     std::lock_guard<std::mutex> guard(in_progress_key_updates_mutex_);
-    auto& token_map = in_progress_key_updates_[key];
-    token_map.reserve(tokens.size());  // Reserve based on token count
-    token_positions = &token_map;
+    // auto& token_map = in_progress_key_updates_[key];
+    // token_map.reserve(tokens.value().size());  // Reserve based on token count
+    // token_positions = &token_map;
+    token_positions = &in_progress_key_updates_[key];
   }
-  for (uint32_t i = 0; i < tokens.size(); ++i) {
-    const auto &token = tokens[i];
+  for (uint32_t i = 0; i < tokens.value().size(); ++i) {
+    const auto &token = tokens.value()[i];
     uint32_t position =
         with_offsets_ ? i
                       : 0;  // If positional info is disabled we default to 0
@@ -209,14 +217,10 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     const std::string &token = entry.first;
     auto &[pos_map, suffix] = entry.second;
 
-    // Avoid string allocation for reverse token when not needed
-    std::string reverse_token_storage;
-    const std::string* reverse_token_ptr = nullptr;
-    if (suffix) {
-      reverse_token_storage.reserve(token.size());
-      std::reverse_copy(token.begin(), token.end(), std::back_inserter(reverse_token_storage));
-      reverse_token_ptr = &reverse_token_storage;
-    }
+    const std::optional<std::string> reverse_token =
+        suffix ? std::optional<std::string>(
+                     std::string(token.rbegin(), token.rend()))
+               : std::nullopt;
 
     // Update metadata from PositionMap
     metadata_.total_positions += pos_map.size();
@@ -249,9 +253,9 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
       text_index_->GetPrefix().MutateTarget(
           token, target_add_fn,
           ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
-      if (suffix && reverse_token_ptr) {
+      if (reverse_token.has_value()) {
         text_index_->GetSuffix().value().get().MutateTarget(
-            *reverse_token_ptr, target_set_fn,
+            reverse_token.value(), target_set_fn,
             ITEM_COUNT_TRACKING_ENABLED(item_count_op::ADD));
       }
     }
@@ -259,8 +263,8 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     // Put the token in the per-key index pointing to the same shared postings
     // object
     key_index.GetPrefix().MutateTarget(token, target_set_fn);
-    if (suffix && reverse_token_ptr) {
-      key_index.GetSuffix().value().get().MutateTarget(*reverse_token_ptr,
+    if (reverse_token.has_value()) {
+      key_index.GetSuffix().value().get().MutateTarget(reverse_token.value(),
                                                        target_set_fn);
     }
   }
