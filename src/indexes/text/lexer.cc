@@ -108,70 +108,50 @@ absl::StatusOr<Lexer::TokenizationResult> Lexer::Tokenize(
       pos++;
     }
 
-    size_t start = pos;
-    bool needs_transformation = false;
-    
-    // Build word, handling backslash escape sequences and checking for transformations
+    std::string word;
+    word.reserve(64);
+
+    // Build word, handling backslash escape sequences
     while (pos < text.size()) {
       char ch = text[pos];
       if (ch == '\\' && pos + 1 < text.size()) {
-        needs_transformation = true;  // Escape sequences require transformation
         char next_ch = text[pos + 1];
         pos++;  // Consume the backslash
         if (next_ch == '\\' || IsPunctuation(next_ch)) {
-          pos++;  // Keep the escaped character
+          // Backslash escapes backslash or punctuation
+          word.push_back(text[pos++]);  // Keep the escaped character
         } else {
+          // Backslash before non-punctuation
           if (IsPunctuation('\\')) {
+            // Backslash is punctuation → end token (Standard Unicode
+            // segmentation)
             break;
           } else {
-            pos++;
+            // Backslash not punctuation → keep letter
+            word.push_back(text[pos++]);
           }
         }
       } else if (IsPunctuation(ch)) {
+        // Regular punctuation - end of word
         break;
       } else {
-        // Check if character needs normalization
-        if (ch >= 'A' && ch <= 'Z') {
-          needs_transformation = true;  // Uppercase needs lowercasing
-        } else if (static_cast<unsigned char>(ch) > 127) {
-          needs_transformation = true;  // Non-ASCII might need normalization
-        }
+        // Regular character
+        word.push_back(ch);
         pos++;
       }
     }
 
-    if (pos > start) {
-      absl::string_view word_view = text.substr(start, pos - start);
-      
-      if (needs_transformation) {
-        // Create owned string for transformation
-        std::string word_str(word_view);
-        NormalizeLowerCaseInPlace(word_str);
-        
-        if (IsStopWord(word_str)) {
-          // current_token_index++;
-          continue;
-        }
-        
-        if (stemming_enabled) {
-          UpdateStemMap(word_str, stemmer, min_stem_size, *stem_mappings);
-        }
-        
-        result.tokens.emplace_back(std::move(word_str), current_token_index++);
-      } else {
-        // Check if already lowercase word is a stop word
-        if (IsStopWord(word_view)) {
-          // current_token_index++;
-          continue;
-        }
-        
-        if (stemming_enabled) {
-          UpdateStemMap(word_view, stemmer, min_stem_size, *stem_mappings);
-        }
-        
-        // Zero-copy: point directly to original data
-        result.tokens.emplace_back(word_view, current_token_index++);
+    if (!word.empty()) {
+      NormalizeLowerCaseInPlace(word);
+
+      if (IsStopWord(word)) {
+        continue;               // Skip stop words
       }
+
+      if (stemming_enabled) {
+        UpdateStemMap(word, stemmer, min_stem_size, *stem_mappings);
+      }
+      result.tokens.emplace_back(std::move(word), current_token_index++);
     }
   }
 
