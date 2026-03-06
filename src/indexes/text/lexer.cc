@@ -108,6 +108,7 @@ absl::StatusOr<Lexer::TokenizationResult> Lexer::Tokenize(
       pos++;
     }
 
+    size_t word_start = pos;
     std::string word;
     word.reserve(64);
 
@@ -140,18 +141,23 @@ absl::StatusOr<Lexer::TokenizationResult> Lexer::Tokenize(
         pos++;
       }
     }
-
     if (!word.empty()) {
       NormalizeLowerCaseInPlace(word);
-
       if (IsStopWord(word)) {
         continue;  // Skip stop words
       }
-
       if (stemming_enabled) {
         UpdateStemMap(word, stemmer, min_stem_size, *stem_mappings);
       }
-      result.tokens.emplace_back(std::move(word), current_token_index++);
+      // Smart constructor: only allocate if word differs from original
+      absl::string_view raw_view = text.substr(word_start, pos - word_start);
+      if (word == raw_view) {
+        // Clean word - use zero-copy view
+        result.tokens.emplace_back(raw_view, current_token_index++);
+      } else {
+        // Dirty word - store owned copy
+        result.tokens.emplace_back(std::move(word), current_token_index++);
+      }
     }
   }
 
