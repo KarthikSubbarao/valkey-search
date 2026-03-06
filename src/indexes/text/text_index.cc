@@ -180,14 +180,15 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   for (const auto &token : result.tokens) {
     // Because 'tokens' is sorted, identical words are adjacent.
     // We only perform a hash lookup when the word actually changes.
-    if (entry_it == token_positions->end() || token.text() != last_text) {
-      entry_it = token_positions->try_emplace(token.text()).first;
-      last_text = token.text();
+    absl::string_view current_text = token.text();
+    if (entry_it == token_positions->end() || current_text != last_text) {
+      entry_it = token_positions->try_emplace(std::string(current_text)).first;
+      last_text = current_text;
     }
     auto &[pos_map, suffix_eligible] = entry_it->second;
     if (suffix) suffix_eligible = true;
     // Use the positional index preserved by the Lexer during tokenization
-    uint32_t position = with_offsets_ ? token.position : 0;
+    uint32_t position = with_offsets_ ? token.position() : 0;
     // PositionMap update: Use try_emplace for internal efficiency
     auto [pos_it, _] = pos_map.try_emplace(position, num_text_fields_);
     pos_it->second.SetField(text_field_number);
