@@ -41,12 +41,12 @@ namespace valkey_search::indexes::text {
 struct Lexer {
   // Struct to bundle the string with its original reading-order position
   struct Token {
-    uintptr_t data; // Pointer + Tag (LSB = 0: view, LSB = 1: owned)
+    uintptr_t data;  // Pointer + Tag (LSB = 0: view, LSB = 1: owned)
     uint32_t len;
     uint32_t pos;
-    
+
     // Constructor for string_view (zero-copy)
-    Token(absl::string_view view, uint32_t position) 
+    Token(absl::string_view view, uint32_t position)
         : len(view.size()), pos(position) {
       // Ensure pointer is aligned and clear LSB
       uintptr_t ptr_val = reinterpret_cast<uintptr_t>(view.data());
@@ -69,9 +69,9 @@ struct Lexer {
         data = ptr_val;  // LSB already 0
       }
     }
-    
+
     // Constructor for owned string (when transformation needed)
-    Token(std::string&& str, uint32_t position) 
+    Token(std::string&& str, uint32_t position)
         : len(str.size()), pos(position) {
       if (str.empty()) {
         data = 1;  // nullptr | 1
@@ -86,14 +86,14 @@ struct Lexer {
         }
       }
     }
-    
+
     // Move constructor
-    Token(Token&& other) noexcept 
+    Token(Token&& other) noexcept
         : data(other.data), len(other.len), pos(other.pos) {
       other.data = 0;
       other.len = 0;
     }
-    
+
     // Move assignment
     Token& operator=(Token&& other) noexcept {
       if (this != &other) {
@@ -106,26 +106,22 @@ struct Lexer {
       }
       return *this;
     }
-    
+
     // Destructor
-    ~Token() {
-      cleanup();
-    }
-    
+    ~Token() { cleanup(); }
+
     // Delete copy operations
     Token(const Token&) = delete;
     Token& operator=(const Token&) = delete;
-    
+
     // Helper to get the actual pointer
     const char* ptr() const {
       return reinterpret_cast<const char*>(data & ~uintptr_t(1));
     }
-    
+
     // Helper to check if we own the memory
-    bool is_owned() const {
-      return (data & 1) != 0;
-    }
-    
+    bool is_owned() const { return (data & 1) != 0; }
+
     // Convert to string_view for sorting/indexing
     absl::string_view text() const {
       const char* p = ptr();
@@ -134,11 +130,14 @@ struct Lexer {
       }
       return absl::string_view(p, len);
     }
-    
+
     // Position accessor
     uint32_t position() const { return pos; }
-    
-  private:
+
+    // Comparison operator for sorting
+    bool operator<(const Token& other) const { return text() < other.text(); }
+
+   private:
     void cleanup() {
       if (is_owned()) {
         const char* p = ptr();
@@ -151,17 +150,17 @@ struct Lexer {
 
   struct TokenizationResult {
     std::vector<Token> tokens;
-    
+
     // Default constructor
     TokenizationResult() = default;
-    
+
     // Destructor - Token destructors handle cleanup automatically
     ~TokenizationResult() = default;
-    
+
     // Move constructor
-    TokenizationResult(TokenizationResult&& other) noexcept 
+    TokenizationResult(TokenizationResult&& other) noexcept
         : tokens(std::move(other.tokens)) {}
-    
+
     // Move assignment
     TokenizationResult& operator=(TokenizationResult&& other) noexcept {
       if (this != &other) {
@@ -169,7 +168,7 @@ struct Lexer {
       }
       return *this;
     }
-    
+
     // Delete copy operations to prevent accidental copying
     TokenizationResult(const TokenizationResult&) = delete;
     TokenizationResult& operator=(const TokenizationResult&) = delete;

@@ -145,7 +145,7 @@ absl::StatusOr<Lexer::TokenizationResult> Lexer::Tokenize(
       NormalizeLowerCaseInPlace(word);
 
       if (IsStopWord(word)) {
-        continue;               // Skip stop words
+        continue;  // Skip stop words
       }
 
       if (stemming_enabled) {
@@ -156,14 +156,7 @@ absl::StatusOr<Lexer::TokenizationResult> Lexer::Tokenize(
   }
 
   // Sort tokens by text for cache locality
-  // Use a stable sort to preserve original order for identical strings
-  std::stable_sort(result.tokens.begin(), result.tokens.end(),
-            [](const Token& a, const Token& b) {
-              // Create temporary strings to ensure safe comparison
-              absl::string_view a_text = a.text();
-              absl::string_view b_text = b.text();
-              return a_text < b_text;
-            });
+  std::sort(result.tokens.begin(), result.tokens.end());
 
   return result;
 }
