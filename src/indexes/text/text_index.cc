@@ -166,8 +166,8 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
     }
     return tokens_res.status();
   }
-  const auto &tokens = tokens_res.value();
-  if (tokens.empty()) return true;
+  const auto &result = tokens_res.value();
+  if (result.tokens.empty()) return true;
   // Map tokens -> positions -> field-masks
   TokenPositions *token_positions;
   {
@@ -177,12 +177,12 @@ absl::StatusOr<bool> TextIndexSchema::StageAttributeData(
   // Iterator Caching relying on the sorted tokens helps with cache locality.
   TokenPositions::iterator entry_it = token_positions->end();
   absl::string_view last_text;
-  for (const auto &token : tokens) {
+  for (const auto &token : result.tokens) {
     // Because 'tokens' is sorted, identical words are adjacent.
     // We only perform a hash lookup when the word actually changes.
-    if (entry_it == token_positions->end() || token.text != last_text) {
-      entry_it = token_positions->try_emplace(token.text).first;
-      last_text = token.text;
+    if (entry_it == token_positions->end() || token.text() != last_text) {
+      entry_it = token_positions->try_emplace(token.text()).first;
+      last_text = token.text();
     }
     auto &[pos_map, suffix_eligible] = entry_it->second;
     if (suffix) suffix_eligible = true;

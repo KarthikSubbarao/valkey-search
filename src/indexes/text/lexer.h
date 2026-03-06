@@ -27,6 +27,7 @@ Tokenization Pipeline:
 #include <bitset>
 #include <string>
 #include <vector>
+#include <variant>
 
 #include "absl/container/flat_hash_set.h"
 #include "absl/status/statusor.h"
@@ -40,15 +41,36 @@ namespace valkey_search::indexes::text {
 struct Lexer {
   // Struct to bundle the string with its original reading-order position
   struct Token {
-    std::string text;
+    std::variant<absl::string_view, std::string> text_storage;
     uint32_t position;
+    
+    // Constructor for string_view (zero-copy)
+    Token(absl::string_view view, uint32_t pos) : text_storage(view), position(pos) {}
+    
+    // Constructor for owned string (when transformation needed)
+    Token(std::string str, uint32_t pos) : text_storage(std::move(str)), position(pos) {}
+    
+    // Get text as string_view regardless of storage type
+    absl::string_view text() const {
+      return std::visit([](const auto& t) -> absl::string_view {
+        if constexpr (std::is_same_v<std::decay_t<decltype(t)>, std::string>) {
+          return absl::string_view(t);
+        } else {
+          return t;
+        }
+      }, text_storage);
+    }
+  };
+
+  struct TokenizationResult {
+    std::vector<Token> tokens;
   };
 
   Lexer(data_model::Language language, const std::string& punctuation,
         const std::vector<std::string>& stop_words);
   ~Lexer() = default;
 
-  absl::StatusOr<std::vector<Token>> Tokenize(
+  absl::StatusOr<TokenizationResult> Tokenize(
       absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
       absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
           stem_mappings = nullptr) const;

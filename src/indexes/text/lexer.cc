@@ -82,7 +82,7 @@ Lexer::Lexer(data_model::Language language, const std::string& punctuation,
       punct_bitmap_(BuildPunctuationBitmap(punctuation)),
       stop_words_set_(BuildStopWordsSet(stop_words)) {}
 
-absl::StatusOr<std::vector<Lexer::Token>> Lexer::Tokenize(
+absl::StatusOr<Lexer::TokenizationResult> Lexer::Tokenize(
     absl::string_view text, bool stemming_enabled, uint32_t min_stem_size,
     absl::flat_hash_map<std::string, absl::flat_hash_set<std::string>>*
         stem_mappings) const {
@@ -93,13 +93,11 @@ absl::StatusOr<std::vector<Lexer::Token>> Lexer::Tokenize(
     return absl::InvalidArgumentError("Invalid UTF-8");
   }
 
-  // Get or create the thread-local stemmer for this lexer's language
+  TokenizationResult result;
   sb_stemmer* stemmer = stemming_enabled ? GetStemmer() : nullptr;
-  std::vector<Lexer::Token> tokens;
-  std::string word;
-  word.reserve(64);
   size_t pos = 0;
   uint32_t current_token_index = 0;
+
   while (pos < text.size()) {
     // Skip leading punctuation, but check for backslash escape sequences
     while (pos < text.size() && IsPunctuation(text[pos])) {
@@ -110,59 +108,80 @@ absl::StatusOr<std::vector<Lexer::Token>> Lexer::Tokenize(
       pos++;
     }
 
-    word.clear();
-
-    // Build word, handling backslash escape sequences
+    size_t start = pos;
+    bool needs_transformation = false;
+    
+    // Build word, handling backslash escape sequences and checking for transformations
     while (pos < text.size()) {
       char ch = text[pos];
       if (ch == '\\' && pos + 1 < text.size()) {
+        needs_transformation = true;  // Escape sequences require transformation
         char next_ch = text[pos + 1];
         pos++;  // Consume the backslash
         if (next_ch == '\\' || IsPunctuation(next_ch)) {
-          // Backslash escapes backslash or punctuation
-          word.push_back(text[pos++]);  // Keep the escaped character
+          pos++;  // Keep the escaped character
         } else {
-          // Backslash before non-punctuation
           if (IsPunctuation('\\')) {
-            // Backslash is punctuation → end token (Standard Unicode
-            // segmentation)
             break;
           } else {
-            // Backslash not punctuation → keep letter
-            word.push_back(text[pos++]);
+            pos++;
           }
         }
       } else if (IsPunctuation(ch)) {
-        // Regular punctuation - end of word
         break;
       } else {
-        // Regular character
-        word.push_back(ch);
+        // Check if character needs normalization
+        if (ch >= 'A' && ch <= 'Z') {
+          needs_transformation = true;  // Uppercase needs lowercasing
+        } else if (static_cast<unsigned char>(ch) > 127) {
+          needs_transformation = true;  // Non-ASCII might need normalization
+        }
         pos++;
       }
     }
 
-    if (!word.empty()) {
-      NormalizeLowerCaseInPlace(word);
-
-      if (IsStopWord(word)) {
-        continue;               // Skip stop words
+    if (pos > start) {
+      absl::string_view word_view = text.substr(start, pos - start);
+      
+      if (needs_transformation) {
+        // Create owned string for transformation
+        std::string word_str(word_view);
+        NormalizeLowerCaseInPlace(word_str);
+        
+        if (IsStopWord(word_str)) {
+          // current_token_index++;
+          continue;
+        }
+        
+        if (stemming_enabled) {
+          UpdateStemMap(word_str, stemmer, min_stem_size, *stem_mappings);
+        }
+        
+        result.tokens.emplace_back(std::move(word_str), current_token_index++);
+      } else {
+        // Check if already lowercase word is a stop word
+        if (IsStopWord(word_view)) {
+          // current_token_index++;
+          continue;
+        }
+        
+        if (stemming_enabled) {
+          UpdateStemMap(word_view, stemmer, min_stem_size, *stem_mappings);
+        }
+        
+        // Zero-copy: point directly to original data
+        result.tokens.emplace_back(word_view, current_token_index++);
       }
-
-      if (stemming_enabled) {
-        UpdateStemMap(word, stemmer, min_stem_size, *stem_mappings);
-      }
-      tokens.push_back({std::move(word), current_token_index++});
     }
   }
-  // Final Sort: Improve Cache Locality.
-  // Groups identical words to ensure linear access during map insertion.
-  std::sort(tokens.begin(), tokens.end(),
-            [](const Lexer::Token& a, const Lexer::Token& b) {
-              return a.text < b.text;
+
+  // Sort tokens by text for cache locality
+  std::sort(result.tokens.begin(), result.tokens.end(),
+            [](const Token& a, const Token& b) {
+              return a.text() < b.text();
             });
 
-  return tokens;
+  return result;
 }
 
 // Returns a thread-local cached stemmer for this lexer's language, creating it
