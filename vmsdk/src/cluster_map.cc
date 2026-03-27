@@ -240,12 +240,23 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
       (node_id_len == VALKEYMODULE_NODE_ID_LEN &&
        memcmp(node_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0);
 
-  // Check for invalid endpoint (nullptr, empty, or "?")
-  if (!is_local_node &&
-      (!node_primary_endpoint_char || node_primary_endpoint_len == 0 ||
-       (node_primary_endpoint_len == 1 &&
-        node_primary_endpoint_char[0] == '?'))) {
-    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
+  std::string node_id_str = std::string(node_id_char, node_id_len);
+
+  // For all nodes, try to use the node info API to get the correct reachable IP
+  std::string primary_endpoint;
+  char node_ip[INET6_ADDRSTRLEN] = "";
+  int node_port_from_api = 0;
+  int node_flags = 0;
+  if (ValkeyModule_GetClusterNodeInfo(nullptr, node_id_char, node_ip, nullptr,
+                                      &node_port_from_api, &node_flags) == VALKEYMODULE_OK) {
+    primary_endpoint = std::string(node_ip);
+    VMSDK_LOG(DEBUG, nullptr) << "Using node IP " << primary_endpoint
+                              << " for " << (is_local_node ? "local" : "remote") 
+                              << " node " << node_id_str;
+  } else {
+    // Node info API failed - this is a serious error
+    VMSDK_LOG(WARNING, nullptr) << "Failed to get node IP for node " << node_id_str 
+                                << " - dropping node from cluster map";
     return std::nullopt;
   }
 
@@ -296,8 +307,7 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
   }
 
   std::string node_id_str = std::string(node_id_char, node_id_len);
-  SocketAddress addr{.primary_endpoint = std::string(node_primary_endpoint_char,
-                                                     node_primary_endpoint_len),
+  SocketAddress addr{.primary_endpoint = primary_endpoint,
                      .port = static_cast<uint16_t>(node_port)};
 
   // Check for duplicate socket addresses across different nodes
