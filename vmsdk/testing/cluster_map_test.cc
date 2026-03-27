@@ -651,12 +651,14 @@ TEST_F(ClusterMapTest, InvalidPrimaryEndpoint) {
   auto cluster_map = CreateClusterMapWithConfig(ranges, primary_ids.at(0));
 
   ASSERT_NE(cluster_map, nullptr);
-  ASSERT_FALSE(cluster_map->IsConsistent());
+  // With control IP API fix, cluster should be consistent even with invalid CLUSTER SLOTS endpoints
+  ASSERT_TRUE(cluster_map->IsConsistent());
   ASSERT_TRUE(cluster_map->IOwnSlot(0));
   ASSERT_FALSE(cluster_map->IOwnSlot(10000));
-  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kPrimary).size(), 1);
-  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kReplicas).size(), 1);
-  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kAll).size(), 2);
+  // All 3 primaries should be available now since control IP API provides valid IPs
+  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kPrimary).size(), 3);
+  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kReplicas).size(), 3);
+  EXPECT_EQ(cluster_map->GetTargets(FanoutTargetMode::kAll).size(), 6);
 }
 
 // ============================================================================
