@@ -240,31 +240,13 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
       (node_id_len == VALKEYMODULE_NODE_ID_LEN &&
        memcmp(node_id_char, my_node_id, VALKEYMODULE_NODE_ID_LEN) == 0);
 
-  std::string node_id_str = std::string(node_id_char, node_id_len);
-
-  // For all nodes, try to use the control IP API to get the correct reachable IP
-  std::string primary_endpoint;
-  char control_ip[INET6_ADDRSTRLEN] = "";
-  int options = VALKEYMODULE_GET_CLUSTER_NODE_INFO_CONTROL_IP;
-  if (ValkeyModule_GetClusterNodeInfo(node_id_char, control_ip, nullptr,
-                                      nullptr, &options) == VALKEYMODULE_OK) {
-    primary_endpoint = std::string(control_ip);
-    VMSDK_LOG(DEBUG, nullptr) << "Using control IP " << primary_endpoint
-                              << " for " << (is_local_node ? "local" : "remote") 
-                              << " node " << node_id_str;
-  } else {
-    // Control IP API failed - fall back to CLUSTER SLOTS IP
-    // This can happen in test scenarios or if the API is not available
-    if (!is_local_node &&
-        (!node_primary_endpoint_char || node_primary_endpoint_len == 0 ||
-         (node_primary_endpoint_len == 1 && node_primary_endpoint_char[0] == '?'))) {
-      // For remote nodes with invalid endpoints, drop the node (original behavior)
-      VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint for remote node " << node_id_str;
-      return std::nullopt;
-    }
-    primary_endpoint = std::string(node_primary_endpoint_char, node_primary_endpoint_len);
-    VMSDK_LOG(WARNING, nullptr) << "Failed to get control IP for node " << node_id_str 
-                                << ", using CLUSTER SLOTS IP: " << primary_endpoint;
+  // Check for invalid endpoint (nullptr, empty, or "?")
+  if (!is_local_node &&
+      (!node_primary_endpoint_char || node_primary_endpoint_len == 0 ||
+       (node_primary_endpoint_len == 1 &&
+        node_primary_endpoint_char[0] == '?'))) {
+    VMSDK_LOG(WARNING, nullptr) << "Invalid node primary endpoint";
+    return std::nullopt;
   }
 
   // Get additional network metadata
@@ -313,7 +295,9 @@ std::optional<NodeInfo> ClusterMap::ParseNodeInfo(
       CHECK(false) << kValkeyModuleCallErrorMsg;
   }
 
-  SocketAddress addr{.primary_endpoint = primary_endpoint,
+  std::string node_id_str = std::string(node_id_char, node_id_len);
+  SocketAddress addr{.primary_endpoint = std::string(node_primary_endpoint_char,
+                                                     node_primary_endpoint_len),
                      .port = static_cast<uint16_t>(node_port)};
 
   // Check for duplicate socket addresses across different nodes
