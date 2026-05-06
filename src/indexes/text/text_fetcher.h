@@ -21,6 +21,9 @@ class TextFetcher : public indexes::EntriesFetcherIteratorBase {
   const Key& operator*() const override;
   void Next() override;
 
+  // Scoring API access - exposes the underlying TextIterator for scoring data
+  const TextIterator* GetTextIterator() const override { return iter_.get(); }
+
  private:
   std::unique_ptr<TextIterator> iter_;
 };

@@ -49,6 +49,37 @@ class OrProximityIterator : public TextIterator {
   FieldMaskPredicate CurrentFieldMask() const override;
   bool IsIteratorValid() const override;
 
+  // Scoring APIs: aggregate across all child iterators on the current key.
+  uint32_t GetTermFrequency() const override {
+    uint32_t total = 0;
+    for (size_t idx : current_key_indices_) total += iters_[idx]->GetTermFrequency();
+    return total;
+  }
+  uint64_t GetDocumentFrequency() const override {
+    uint64_t total = 0;
+    for (size_t idx : current_key_indices_) total += iters_[idx]->GetDocumentFrequency();
+    return total;
+  }
+  uint32_t GetDocumentLength() const override {
+    for (size_t idx : current_key_indices_) {
+      uint32_t dl = iters_[idx]->GetDocumentLength();
+      if (dl > 0) return dl;
+    }
+    return 0;
+  }
+  uint32_t GetNorm() const override {
+    for (size_t idx : current_key_indices_) {
+      uint32_t n = iters_[idx]->GetNorm();
+      if (n > 0) return n;
+    }
+    return 0;
+  }
+  // Recurse into active children so each leaf term contributes its own TermInfo.
+  void CollectTermInfos(
+      std::vector<std::pair<uint32_t, uint64_t>>& out) const override {
+    for (size_t idx : current_key_indices_) iters_[idx]->CollectTermInfos(out);
+  }
+
  private:
   absl::InlinedVector<std::unique_ptr<TextIterator>,
                       kProximityTermsInlineCapacity>

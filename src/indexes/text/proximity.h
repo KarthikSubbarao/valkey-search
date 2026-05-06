@@ -73,6 +73,38 @@ class ProximityIterator : public TextIterator {
            current_field_mask_ != 0ULL && query_field_mask_ != 0ULL;
   }
 
+  // Scoring APIs: aggregate across all child iterators.
+  uint32_t GetTermFrequency() const override {
+    uint32_t total = 0;
+    for (const auto& iter : iters_) total += iter->GetTermFrequency();
+    return total;
+  }
+  uint64_t GetDocumentFrequency() const override {
+    uint64_t total = 0;
+    for (const auto& iter : iters_) total += iter->GetDocumentFrequency();
+    return total;
+  }
+  uint32_t GetDocumentLength() const override {
+    // All children are on the same document; return from the first that knows.
+    for (const auto& iter : iters_) {
+      uint32_t dl = iter->GetDocumentLength();
+      if (dl > 0) return dl;
+    }
+    return 0;
+  }
+  uint32_t GetNorm() const override {
+    for (const auto& iter : iters_) {
+      uint32_t n = iter->GetNorm();
+      if (n > 0) return n;
+    }
+    return 0;
+  }
+  // Recurse into children so each leaf term contributes its own TermInfo.
+  void CollectTermInfos(
+      std::vector<std::pair<uint32_t, uint64_t>>& out) const override {
+    for (const auto& iter : iters_) iter->CollectTermInfos(out);
+  }
+
  private:
   // List of all the Text Predicates contained in the Proximity AND.
   absl::InlinedVector<std::unique_ptr<TextIterator>,

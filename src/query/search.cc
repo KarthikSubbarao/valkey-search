@@ -9,6 +9,7 @@
 
 #include <absl/strings/str_split.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <deque>
 #include <memory>
@@ -41,6 +42,7 @@
 #include "src/query/content_resolution.h"
 #include "src/query/planner.h"
 #include "src/query/predicate.h"
+#include "src/query/scorer.h"
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "third_party/hnswlib/hnswlib.h"
@@ -369,12 +371,10 @@ void EvaluatePrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     absl::AnyInvocable<bool(const InternedStringPtr &,
-                            absl::flat_hash_set<const char *> &)>
+                            absl::flat_hash_set<const char *> &,
+                            const indexes::text::TextIterator*)>
         appender,
     size_t max_keys, bool stop_on_fetch_limit) {
-  // If there was a union operation, we need to handle deduplication.
-  // This implementation skips deduplication (flat_hash_set usage) if not needed
-  // for performance.
   bool needs_dedup =
       NeedsDeduplication(parameters.filter_parse_results.query_operations);
   absl::flat_hash_set<const char *> result_keys;
@@ -390,7 +390,6 @@ void EvaluatePrefilteredKeys(
     auto iterator = fetcher->Begin();
     while (!iterator->Done()) {
       const auto &key = **iterator;
-      // 1. Skip if already processed (only if dedup is needed)
       if (needs_dedup && result_keys.contains(key->Str().data())) {
         iterator->Next();
         continue;
@@ -401,14 +400,17 @@ void EvaluatePrefilteredKeys(
       indexes::PrefilterEvaluator key_evaluator(
           text_index, parameters.filter_parse_results.query_operations);
       BACKGROUND_PAUSEPOINT("search_prefilter_eval");
-      // 3. Evaluate predicate
-      if (key_evaluator.Evaluate(
-              *parameters.filter_parse_results.root_predicate, key)) {
-        bool result = appender(key, result_keys);
+      // Evaluate predicate; the returned EvaluationResult carries a
+      // filter_iterator that is already positioned on this key and holds all
+      // per-term TF/DF data — pass it to the appender for scoring.
+      EvaluationResult eval_result = key_evaluator.EvaluateForScoring(
+          *parameters.filter_parse_results.root_predicate, key);
+      if (eval_result.matches) {
+        bool result = appender(key, result_keys,
+                               eval_result.filter_iterator.get());
         if (needs_dedup && result) {
           result_keys.insert(key->Str().data());
         }
-        // For non-vector queries that exceed the fetch limit, return early
         if (stop_on_fetch_limit && !result) {
           return;
         }
@@ -430,7 +432,8 @@ CalcBestMatchingPrefilteredKeys(
   auto results_appender =
       [&results, &parameters, vector_index](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          absl::flat_hash_set<const char *> &top_keys,
+          const indexes::text::TextIterator* /*iter*/) -> bool {
     return vector_index->AddPrefilteredKey(parameters.query, parameters.k, key,
                                            results, top_keys);
   };
@@ -565,6 +568,52 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   return results;
 }
 
+namespace {
+
+// Compute a score for a document using the TextIterator that matched it.
+// The iterator is already positioned on the current key and holds all
+// per-term TF/DF data — we just read it out via CollectTermInfos().
+// This is the correct approach for nested queries: the iterator tree mirrors
+// the query tree, so scores bubble up naturally without a separate index walk.
+float ScoreFromIterator(
+    const indexes::text::TextIterator& iter,
+    const std::shared_ptr<indexes::text::TextIndexSchema>& text_index_schema) {
+  uint64_t total_docs =
+      text_index_schema ? text_index_schema->GetTotalDocumentCount() : 0;
+  double avg_doc_len =
+      text_index_schema ? text_index_schema->GetAverageDocumentLength() : 0.0;
+
+  ScoringContext ctx =
+      ScoringContext::FromIterator(iter, total_docs, avg_doc_len);
+
+  static auto scorer = Scorer::Create(ScorerType::kTFIDF);
+  return scorer->ComputeScore(ctx);
+}
+
+// Fallback: score a document when no iterator is available (e.g. match-all,
+// tag-only, or numeric-only queries that have no text iterator).
+// Uses only the pre-computed document metadata — no per-term info.
+float ScoreFromMetadata(
+    const InternedStringPtr& key,
+    const std::shared_ptr<indexes::text::TextIndexSchema>& text_index_schema) {
+  if (!text_index_schema) return 0.0f;
+  auto* meta = text_index_schema->GetDocumentScoringMetadata(key);
+  if (!meta) return 0.0f;
+
+  ScoringContext ctx;
+  ctx.has_text_fields = true;
+  ctx.doc_len = meta->doc_len;
+  ctx.norm = meta->norm;
+  ctx.total_docs = text_index_schema->GetTotalDocumentCount();
+  ctx.avg_doc_len = text_index_schema->GetAverageDocumentLength();
+  // No per-term info available in this path.
+
+  static auto scorer = Scorer::Create(ScorerType::kTFIDF);
+  return scorer->ComputeScore(ctx);
+}
+
+}  // namespace
+
 absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
     const SearchParameters &parameters) {
   std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> entries_fetchers;
@@ -587,15 +636,30 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(std::min(qualified_entries, static_cast<size_t>(5000)));
   bool fetch_limited = false;
+
+  // Get text index schema for scoring
+  const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
+      parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
+                              : nullptr;
+
   auto results_appender =
-      [&neighbors, &parameters, max_keys, &fetch_limited](
+      [&neighbors, &parameters, max_keys, &fetch_limited, &text_index_schema](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          absl::flat_hash_set<const char *> &top_keys,
+          const indexes::text::TextIterator* iter) -> bool {
     if (neighbors.size() >= max_keys) {
       fetch_limited = true;
       return false;
     }
     neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
+    // Use the iterator from predicate evaluation when available — it carries
+    // per-term TF/DF data from the matched query tree. Fall back to metadata
+    // only when no iterator is present (e.g. tag/numeric-only queries).
+    if (iter) {
+      neighbors.back().score = ScoreFromIterator(*iter, text_index_schema);
+    } else {
+      neighbors.back().score = ScoreFromMetadata(key, text_index_schema);
+    }
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -629,11 +693,28 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
           return neighbors;
         }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
+        // In the direct EntriesFetcher path the iterator IS the text iterator
+        // (TermIterator or TextIteratorFetcher wrapping one). Ask it directly.
+        auto* text_iter = iterator->GetTextIterator();
+        if (text_iter) {
+          neighbors.back().score =
+              ScoreFromIterator(*text_iter, text_index_schema);
+        } else {
+          neighbors.back().score = ScoreFromMetadata(key, text_index_schema);
+        }
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
           return neighbors;
         }
       }
+    }
+    // Sort by score descending when no SORTBY is specified
+    if (!neighbors.empty() && !parameters.sortby_parameter.has_value()) {
+      std::stable_sort(neighbors.begin(), neighbors.end(),
+                       [](const indexes::Neighbor& a,
+                          const indexes::Neighbor& b) {
+                         return a.score > b.score;
+                       });
     }
     return neighbors;
   }
@@ -643,6 +724,16 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   if (fetch_limited) {
     nonvector_results_fetched_limited_count.Increment();
   }
+
+  // Sort by score descending when no SORTBY is specified
+  if (!neighbors.empty() && !parameters.sortby_parameter.has_value()) {
+    std::stable_sort(neighbors.begin(), neighbors.end(),
+                     [](const indexes::Neighbor& a,
+                        const indexes::Neighbor& b) {
+                       return a.score > b.score;
+                     });
+  }
+
   return neighbors;
 }
 

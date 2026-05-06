@@ -25,6 +25,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/response_generator.h"
+#include "src/query/scorer.h"
 #include "src/query/search.h"
 #include "value.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -320,6 +321,17 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     ++Metrics::GetStats().query_failed_requests_cnt;
     ValkeyModule_ReplyWithError(ctx, status.message().data());
     return;
+  }
+
+  // Re-sort by score descending if no SORTBY is specified and this is a
+  // non-vector query. Scores may have been recomputed during re-evaluation.
+  if (IsNonVectorQuery() && !sortby_parameter.has_value() &&
+      !search_result.neighbors.empty()) {
+    std::stable_sort(
+        search_result.neighbors.begin(), search_result.neighbors.end(),
+        [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
+          return a.score > b.score;
+        });
   }
 
   ApplySorting(search_result.neighbors, *this);

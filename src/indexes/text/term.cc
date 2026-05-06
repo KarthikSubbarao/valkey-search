@@ -7,15 +7,19 @@
 
 #include "src/indexes/text/term.h"
 
+#include "src/indexes/text/text_index.h"
+
 namespace valkey_search::indexes::text {
 
 TermIterator::TermIterator(
     absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
         key_iterators,
     const FieldMaskPredicate query_field_mask, const bool require_positions,
-    const FieldMaskPredicate stem_field_mask, bool has_original)
+    const FieldMaskPredicate stem_field_mask, bool has_original,
+    TextIndexSchema* text_index_schema)
     : query_field_mask_(query_field_mask),
       stem_field_mask_(stem_field_mask),
+      text_index_schema_(text_index_schema),
       key_iterators_(std::move(key_iterators)),
       current_position_(std::nullopt),
       current_field_mask_(0ULL),
@@ -247,6 +251,49 @@ void TermIterator::ClearPositionState() {
   current_pos_indices_.clear();
   current_position_ = std::nullopt;
   current_field_mask_ = 0ULL;
+}
+
+uint32_t TermIterator::GetTermFrequency() const {
+  if (DoneKeys()) return 0;
+  // Count positions for the current key across all active posting iterators.
+  // The number of positions in the pos_iterators_ represents the term frequency
+  // for the current document. We count by iterating through positions.
+  uint32_t count = 0;
+  for (size_t idx : current_key_indices_) {
+    auto pos_iter = key_iterators_[idx].GetPositionIterator();
+    while (pos_iter.IsValid()) {
+      if (pos_iter.GetFieldMask() & query_field_mask_) {
+        ++count;
+      }
+      pos_iter.NextPosition();
+    }
+  }
+  return count;
+}
+
+uint64_t TermIterator::GetDocumentFrequency() const {
+  if (DoneKeys()) return 0;
+  // Sum GetKeyCount() across all key iterators (each represents a posting
+  // for a word variant).
+  uint64_t total = 0;
+  for (const auto& key_iter : key_iterators_) {
+    total += key_iter.GetKeyCount();
+  }
+  return total;
+}
+
+uint32_t TermIterator::GetDocumentLength() const {
+  if (DoneKeys() || !text_index_schema_) return 0;
+  const auto* metadata =
+      text_index_schema_->GetDocumentScoringMetadata(current_key_);
+  return metadata ? metadata->doc_len : 0;
+}
+
+uint32_t TermIterator::GetNorm() const {
+  if (DoneKeys() || !text_index_schema_) return 0;
+  const auto* metadata =
+      text_index_schema_->GetDocumentScoringMetadata(current_key_);
+  return metadata ? metadata->norm : 0;
 }
 
 }  // namespace valkey_search::indexes::text

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <bitset>
 #include <cctype>
+#include <cstdint>
 #include <memory>
 #include <optional>
 
@@ -41,6 +42,12 @@ using TokenPositions =
     absl::flat_hash_map<std::string, std::pair<PositionMap, bool>>;
 
 class TextIndexSchema;
+
+// Per-document scoring metadata used by text search scoring algorithms.
+struct DocumentScoringMetadata {
+  uint32_t doc_len{0};   // Total number of tokens in the document
+  uint32_t norm{0};      // Maximum frequency of any single word in the document
+};
 
 // FT.INFO counters for text info fields and memory pools
 struct TextIndexMetadata {
@@ -132,6 +139,16 @@ class TextIndexSchema {
     text_index_ = std::make_shared<TextIndex>(true);
   }
 
+  // Scoring metadata APIs
+  void SetDocumentScoringMetadata(const Key& key, uint32_t doc_len,
+                                  uint32_t norm);
+  const DocumentScoringMetadata* GetDocumentScoringMetadata(
+      const Key& key) const;
+  void RemoveDocumentScoringMetadata(const Key& key);
+  uint64_t GetTotalDocumentCount() const;
+  uint64_t GetTotalDocumentLength() const;
+  double GetAverageDocumentLength() const;
+
  private:
   uint8_t num_text_fields_ = 0;
 
@@ -189,6 +206,13 @@ class TextIndexSchema {
 
   // Prevent concurrent mutations to in-progress stem mappings map
   std::mutex in_progress_stem_mappings_mutex_;
+
+  // Per-document scoring metadata (doc_len, norm)
+  absl::node_hash_map<Key, DocumentScoringMetadata> scoring_metadata_;
+
+  // Index-level statistics for scoring
+  std::atomic<uint64_t> total_document_count_{0};
+  std::atomic<uint64_t> total_document_length_{0};
 
   // Whether to store position offsets for phrase queries
   bool with_offsets_ = false;

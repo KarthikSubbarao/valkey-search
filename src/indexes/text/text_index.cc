@@ -284,6 +284,20 @@ void TextIndexSchema::CommitKeyData(const InternedStringPtr &key) {
     std::lock_guard<std::mutex> per_key_guard(per_key_text_indexes_mutex_);
     per_key_text_indexes_.emplace(key, std::move(key_index));
   }
+
+  // Compute scoring metadata: doc_len = total tokens, norm = max word frequency
+  uint32_t doc_len = 0;
+  uint32_t norm = 0;
+  for (const auto &entry : token_positions) {
+    const auto &[pos_map, suffix] = entry.second;
+    uint32_t word_freq = pos_map.size();
+    doc_len += word_freq;
+    if (word_freq > norm) {
+      norm = word_freq;
+    }
+  }
+  SetDocumentScoringMetadata(key, doc_len, norm);
+  total_document_count_.fetch_add(1);
 }
 
 void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
@@ -296,6 +310,10 @@ void TextIndexSchema::DeleteKeyData(const InternedStringPtr &key) {
       return;
     }
   }
+
+  // Remove scoring metadata and decrement document count
+  RemoveDocumentScoringMetadata(key);
+  total_document_count_.fetch_sub(1);
   TextIndex &key_index = node.mapped();
   auto suffix_opt = text_index_->GetSuffix();
 
@@ -417,6 +435,55 @@ const TextIndex *TextIndexSchema::GetPerKeyTextIndex(const Key &key,
   }
   // Key not found in text indexes - this is normal for keys without text data
   return nullptr;
+}
+
+void TextIndexSchema::SetDocumentScoringMetadata(const Key &key,
+                                                 uint32_t doc_len,
+                                                 uint32_t norm) {
+  std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
+  auto it = scoring_metadata_.find(key);
+  if (it != scoring_metadata_.end()) {
+    // Replacing existing metadata - adjust total_document_length_
+    total_document_length_.fetch_sub(it->second.doc_len);
+    it->second.doc_len = doc_len;
+    it->second.norm = norm;
+  } else {
+    scoring_metadata_.emplace(key, DocumentScoringMetadata{doc_len, norm});
+  }
+  total_document_length_.fetch_add(doc_len);
+}
+
+const DocumentScoringMetadata *TextIndexSchema::GetDocumentScoringMetadata(
+    const Key &key) const {
+  auto it = scoring_metadata_.find(key);
+  if (it != scoring_metadata_.end()) {
+    return &it->second;
+  }
+  return nullptr;
+}
+
+void TextIndexSchema::RemoveDocumentScoringMetadata(const Key &key) {
+  std::lock_guard<std::mutex> guard(per_key_text_indexes_mutex_);
+  auto it = scoring_metadata_.find(key);
+  if (it != scoring_metadata_.end()) {
+    total_document_length_.fetch_sub(it->second.doc_len);
+    scoring_metadata_.erase(it);
+  }
+}
+
+uint64_t TextIndexSchema::GetTotalDocumentCount() const {
+  return total_document_count_.load();
+}
+
+uint64_t TextIndexSchema::GetTotalDocumentLength() const {
+  return total_document_length_.load();
+}
+
+double TextIndexSchema::GetAverageDocumentLength() const {
+  uint64_t count = total_document_count_.load();
+  if (count == 0) return 0.0;
+  return static_cast<double>(total_document_length_.load()) /
+         static_cast<double>(count);
 }
 
 }  // namespace valkey_search::indexes::text

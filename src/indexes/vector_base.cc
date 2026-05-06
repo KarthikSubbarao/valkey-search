@@ -86,6 +86,16 @@ bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
   return res.matches;
 }
 
+query::EvaluationResult PrefilterEvaluator::EvaluateForScoring(
+    const query::Predicate &predicate, const InternedStringPtr &key) {
+  key_ = &key;
+  auto res = predicate.Evaluate(*this);
+  key_ = nullptr;
+  // Return the full result including filter_iterator, which carries per-term
+  // TF/DF data from the matched query tree for iterator-driven scoring.
+  return res;
+}
+
 query::EvaluationResult PrefilterEvaluator::EvaluateTags(
     const query::TagPredicate &predicate) {
   bool case_sensitive = true;
@@ -106,6 +116,9 @@ query::EvaluationResult PrefilterEvaluator::EvaluateText(
   if (!text_index_) {
     return query::EvaluationResult(false);
   }
+  // Evaluate and return the full result including filter_iterator.
+  // The iterator is already positioned on *key_ and holds per-term TF/DF data
+  // that the scoring pipeline reads via CollectTermInfos().
   return predicate.Evaluate(*text_index_, *key_, require_positions);
 }
 

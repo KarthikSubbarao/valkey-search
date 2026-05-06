@@ -7,12 +7,14 @@
 
 #include "src/query/content_resolution.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
 
 #include "src/index_schema.h"
 #include "src/query/response_generator.h"
+#include "src/query/scorer.h"
 #include "src/query/search.h"
 #include "vmsdk/src/managed_pointers.h"
 
@@ -64,6 +66,18 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
   query::ProcessNeighborsForReply(ctx.get(), attribute_data_type,
                                   params->search_result.neighbors, *params,
                                   vector_identifier);
+
+  // Re-sort by score descending if no SORTBY is specified.
+  // Scores may have been recomputed during VerifyFilter re-evaluation.
+  if (!params->sortby_parameter.has_value() &&
+      !params->search_result.neighbors.empty()) {
+    std::stable_sort(
+        params->search_result.neighbors.begin(),
+        params->search_result.neighbors.end(),
+        [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
+          return a.score > b.score;
+        });
+  }
 
   // 5. Adjust search_result.total_count for removed neighbors
   size_t removed = original_size - params->search_result.neighbors.size();

@@ -23,6 +23,10 @@
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
+namespace valkey_search::indexes::text {
+class TextIterator;
+}  // namespace valkey_search::indexes::text
+
 namespace valkey_search::indexes {
 enum class IndexerType { kHNSW, kFlat, kNumeric, kTag, kVector, kNone, kText };
 
@@ -86,6 +90,10 @@ class EntriesFetcherIteratorBase {
   virtual void Next() = 0;
   virtual const InternedStringPtr& operator*() const = 0;
   virtual ~EntriesFetcherIteratorBase() = default;
+
+  // Returns the underlying TextIterator if this is a text-based fetcher,
+  // nullptr otherwise. Used by the scoring pipeline to access term statistics.
+  virtual const text::TextIterator* GetTextIterator() const { return nullptr; }
 };
 
 class EntriesFetcherBase {

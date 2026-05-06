@@ -170,4 +170,9 @@ PositionIterator Postings::KeyIterator::GetPositionIterator() const {
   return PositionIterator(*flat_map);
 }
 
+size_t Postings::KeyIterator::GetKeyCount() const {
+  CHECK(key_map_ != nullptr) << "KeyIterator is invalid";
+  return key_map_->size();
+}
+
 }  // namespace valkey_search::indexes::text

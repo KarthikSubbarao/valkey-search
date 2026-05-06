@@ -26,6 +26,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/metrics.h"
 #include "src/query/predicate.h"
+#include "src/query/scorer.h"
 #include "src/query/search.h"
 #include "src/valkey_search.h"
 #include "vmsdk/src/info.h"
@@ -152,8 +153,30 @@ class PredicateEvaluator : public query::Evaluator {
 
 DEV_INTEGER_COUNTER(query, predicate_revalidation);
 
+namespace {
+// Recompute the score for a neighbor using the current index state.
+// Called on the main thread when VerifyFilter detects a mutation mismatch.
+float RecomputeNeighborScore(
+    const InternedStringPtr& key,
+    const std::shared_ptr<indexes::text::TextIndexSchema>& text_index_schema) {
+  if (!text_index_schema) return 0.0f;
+  auto* meta = text_index_schema->GetDocumentScoringMetadata(key);
+  if (!meta) return 0.0f;
+
+  ScoringContext ctx;
+  ctx.has_text_fields = true;
+  ctx.doc_len = meta->doc_len;
+  ctx.norm = meta->norm;
+  ctx.total_docs = text_index_schema->GetTotalDocumentCount();
+  ctx.avg_doc_len = text_index_schema->GetAverageDocumentLength();
+
+  static auto scorer = Scorer::Create(ScorerType::kTFIDF);
+  return scorer->ComputeScore(ctx);
+}
+}  // namespace
+
 bool VerifyFilter(const query::SearchParameters &parameters,
-                  const RecordsMap &records, const indexes::Neighbor &n) {
+                  const RecordsMap &records, indexes::Neighbor &n) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
   if (predicate == nullptr) {
     return true;
@@ -175,6 +198,11 @@ bool VerifyFilter(const query::SearchParameters &parameters,
         records, text_index, n.external_id,
         parameters.filter_parse_results.query_operations);
     EvaluationResult result = predicate->Evaluate(evaluator);
+    if (result.matches) {
+      // Recompute score using current index state after mismatch
+      n.score = RecomputeNeighborScore(
+          n.external_id, parameters.index_schema->GetTextIndexSchema());
+    }
     return result.matches;
   }
   PredicateEvaluator evaluator(
@@ -198,7 +226,7 @@ bool CheckSlotOwnership(ValkeyModuleCtx *ctx, absl::string_view key) {
 absl::StatusOr<RecordsMap> GetContentNoReturnJson(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
-    const indexes::Neighbor &neighbor,
+    indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier) {
   auto key = neighbor.external_id->Str();
   absl::flat_hash_set<absl::string_view> identifiers;
@@ -278,7 +306,7 @@ absl::StatusOr<RecordsMap> GetContentNoReturnJson(
 absl::StatusOr<RecordsMap> GetContent(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     const query::SearchParameters &parameters,
-    const indexes::Neighbor &neighbor,
+    indexes::Neighbor &neighbor,
     const std::optional<std::string> &vector_identifier) {
   auto key = neighbor.external_id->Str();
   if (attribute_data_type.ToProto() ==
@@ -438,6 +466,17 @@ void ProcessNeighborsForReply(
                        return !neighbor.attribute_contents.has_value();
                      }),
       neighbors.end());
+
+  // Re-sort by score descending after main-thread re-evaluation.
+  // VerifyFilter may have recomputed scores for neighbors with mutation
+  // mismatches. Re-sort to reflect updated scores, unless SORTBY overrides.
+  if (!neighbors.empty() && !parameters.sortby_parameter.has_value()) {
+    std::stable_sort(neighbors.begin(), neighbors.end(),
+                     [](const indexes::Neighbor &a,
+                        const indexes::Neighbor &b) {
+                       return a.score > b.score;
+                     });
+  }
 }
 
 }  // namespace valkey_search::query

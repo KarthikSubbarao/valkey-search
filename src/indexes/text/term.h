@@ -16,6 +16,8 @@
 
 namespace valkey_search::indexes::text {
 
+class TextIndexSchema;
+
 /*
 
 Top level iterator for a Term.
@@ -44,7 +46,8 @@ class TermIterator : public TextIterator {
       absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>&&
           key_iterators,
       const FieldMaskPredicate query_field_mask, const bool require_positions,
-      const FieldMaskPredicate stem_field_mask = 0, bool has_original = false);
+      const FieldMaskPredicate stem_field_mask = 0, bool has_original = false,
+      TextIndexSchema* text_index_schema = nullptr);
   /* Implementation of TextIterator APIs */
   FieldMaskPredicate QueryFieldMask() const override;
   // Key-level iteration
@@ -67,6 +70,13 @@ class TermIterator : public TextIterator {
     }
     return current_key_ ? true : false;
   }
+
+  // Scoring APIs
+  uint32_t GetTermFrequency() const override;
+  uint64_t GetDocumentFrequency() const override;
+  uint32_t GetDocumentLength() const override;
+  uint32_t GetNorm() const override;
+
   /* Implementation of APIs unique to TermIterator */
   // It is possible to implement a `CurrentKeyIterVecIdx` API that returns the
   // index of the vector of the posting iterator (provided on init) that matches
@@ -75,6 +85,7 @@ class TermIterator : public TextIterator {
  private:
   const FieldMaskPredicate query_field_mask_;
   const FieldMaskPredicate stem_field_mask_;
+  TextIndexSchema* text_index_schema_;
   absl::InlinedVector<Postings::KeyIterator, kWordExpansionInlineCapacity>
       key_iterators_;
   absl::InlinedVector<PositionIterator, kWordExpansionInlineCapacity>

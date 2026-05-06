@@ -8,6 +8,10 @@
 #ifndef VALKEY_SEARCH_INDEXES_TEXT_ITERATOR_H_
 #define VALKEY_SEARCH_INDEXES_TEXT_ITERATOR_H_
 
+#include <cstdint>
+#include <utility>
+#include <vector>
+
 #include "src/indexes/text/posting.h"
 #include "src/utils/string_interning.h"
 
@@ -103,6 +107,45 @@ class TextIterator {
   // Returns true if iterator is at a valid state (has current key, position,
   // and field)
   virtual bool IsIteratorValid() const = 0;
+
+  // Scoring APIs - available when !DoneKeys()
+  //
+  // These APIs expose per-document scoring statistics for the current key.
+  // For leaf iterators (TermIterator), they return data for a single term.
+  // For composite iterators (ProximityIterator, OrProximityIterator), they
+  // aggregate across all child iterators so that scores bubble up naturally
+  // through the query tree without requiring a separate index lookup.
+  //
+  // Callers should use CollectTermInfos() to gather per-term TermInfo entries
+  // for building a ScoringContext, rather than calling these directly.
+
+  // Returns the term frequency for this iterator's term(s) in the current
+  // document. For composite iterators, returns the sum across all children
+  // that are on the current key.
+  virtual uint32_t GetTermFrequency() const { return 0; }
+  // Returns the document frequency (number of documents containing this term).
+  // For composite iterators, returns the sum across all children.
+  virtual uint64_t GetDocumentFrequency() const { return 0; }
+  // Returns the total token count of the current document (doc_len).
+  // Derived from DocumentScoringMetadata stored in TextIndexSchema.
+  virtual uint32_t GetDocumentLength() const { return 0; }
+  // Returns the norm (max word frequency) of the current document.
+  // Derived from DocumentScoringMetadata stored in TextIndexSchema.
+  virtual uint32_t GetNorm() const { return 0; }
+
+  // Collects one TermInfo per leaf term into |out|, preserving the tree
+  // structure so the scorer sees individual term contributions.
+  // Default: appends a single TermInfo built from GetTermFrequency() /
+  // GetDocumentFrequency(). Composite iterators override to recurse into
+  // children.
+  virtual void CollectTermInfos(
+      std::vector<std::pair<uint32_t /*tf*/, uint64_t /*df*/>>& out) const {
+    uint32_t tf = GetTermFrequency();
+    uint64_t df = GetDocumentFrequency();
+    if (tf > 0 || df > 0) {
+      out.push_back({tf, df});
+    }
+  }
 };
 
 }  // namespace valkey_search::indexes::text

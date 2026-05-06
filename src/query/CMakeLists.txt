@@ -13,6 +13,12 @@ add_library(predicate_header INTERFACE ${SRCS_PREDICATE_HEADER})
 target_include_directories(predicate_header INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(predicate_header INTERFACE vmsdklib)
 
+set(SRCS_SCORER ${CMAKE_CURRENT_LIST_DIR}/scorer.cc
+                ${CMAKE_CURRENT_LIST_DIR}/scorer.h)
+
+valkey_search_add_static_library(scorer "${SRCS_SCORER}")
+target_include_directories(scorer PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+
 set(SRCS_SEARCH ${CMAKE_CURRENT_LIST_DIR}/search.cc
                 ${CMAKE_CURRENT_LIST_DIR}/search.h)
 
@@ -35,6 +41,7 @@ target_link_libraries(search PUBLIC hnswlib_vmsdk)
 target_link_libraries(search PUBLIC vmsdklib)
 target_link_libraries(search PUBLIC valkey_module)
 target_link_libraries(search PUBLIC content_resolution)
+target_link_libraries(search PUBLIC scorer)
 
 set(SRCS_SEARCH_HEADER ${CMAKE_CURRENT_LIST_DIR}/search.h)
 
@@ -89,6 +96,7 @@ target_link_libraries(response_generator PUBLIC predicate_header)
 target_link_libraries(response_generator PUBLIC search_header)
 target_link_libraries(response_generator PUBLIC attribute_data_type)
 target_link_libraries(response_generator PUBLIC coordinator_cc_proto)
+target_link_libraries(response_generator PUBLIC scorer)
 target_link_libraries(response_generator PUBLIC tag)
 target_link_libraries(response_generator PUBLIC vector_base)
 target_link_libraries(response_generator PUBLIC vmsdklib)

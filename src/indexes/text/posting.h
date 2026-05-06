@@ -121,6 +121,9 @@ struct Postings {
     // Get Position Iterator
     PositionIterator GetPositionIterator() const;
 
+    // Get the total number of keys in the underlying postings
+    size_t GetKeyCount() const;
+
    private:
     friend struct Postings;
 
