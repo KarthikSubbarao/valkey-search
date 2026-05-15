@@ -629,6 +629,10 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
           return neighbors;
         }
         neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
+        // Score from the text iterator if available
+        if (auto* text_iter = iterator->GetTextIterator()) {
+          neighbors.back().score = text_iter->GetScore();
+        }
         iterator->Next();
         if (parameters.cancellation_token->IsCancelled()) {
           return neighbors;

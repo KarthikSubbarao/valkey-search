@@ -66,7 +66,7 @@ void SendReplyNoContent(ValkeyModuleCtx *ctx,
 void ReplyScore(ValkeyModuleCtx *ctx, ValkeyModuleString &score_as,
                 const indexes::Neighbor &neighbor) {
   ValkeyModule_ReplyWithString(ctx, &score_as);
-  auto score_value = absl::StrFormat("%.12g", neighbor.distance);
+  auto score_value = absl::StrFormat("%.12g", neighbor.score);
   ValkeyModule_ReplyWithString(
       ctx, vmsdk::MakeUniqueValkeyString(score_value).get());
 }
