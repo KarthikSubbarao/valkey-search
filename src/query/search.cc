@@ -9,6 +9,7 @@
 
 #include <absl/strings/str_split.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <deque>
 #include <memory>
@@ -369,7 +370,7 @@ void EvaluatePrefilteredKeys(
     const SearchParameters &parameters,
     std::queue<std::unique_ptr<indexes::EntriesFetcherBase>> &entries_fetchers,
     absl::AnyInvocable<bool(const InternedStringPtr &,
-                            absl::flat_hash_set<const char *> &)>
+                            absl::flat_hash_set<const char *> &, float)>
         appender,
     size_t max_keys, bool stop_on_fetch_limit) {
   // If there was a union operation, we need to handle deduplication.
@@ -401,10 +402,11 @@ void EvaluatePrefilteredKeys(
       indexes::PrefilterEvaluator key_evaluator(
           text_index, parameters.filter_parse_results.query_operations);
       BACKGROUND_PAUSEPOINT("search_prefilter_eval");
-      // 3. Evaluate predicate
-      if (key_evaluator.Evaluate(
-              *parameters.filter_parse_results.root_predicate, key)) {
-        bool result = appender(key, result_keys);
+      // Evaluate predicate and extract score
+      auto eval_result = key_evaluator.EvaluateWithScore(
+          *parameters.filter_parse_results.root_predicate, key);
+      if (eval_result.matches) {
+        bool result = appender(key, result_keys, eval_result.score);
         if (needs_dedup && result) {
           result_keys.insert(key->Str().data());
         }
@@ -430,7 +432,8 @@ CalcBestMatchingPrefilteredKeys(
   auto results_appender =
       [&results, &parameters, vector_index](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          absl::flat_hash_set<const char *> &top_keys,
+          float /*score*/) -> bool {
     return vector_index->AddPrefilteredKey(parameters.query, parameters.k, key,
                                            results, top_keys);
   };
@@ -590,12 +593,12 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   auto results_appender =
       [&neighbors, &parameters, max_keys, &fetch_limited](
           const InternedStringPtr &key,
-          absl::flat_hash_set<const char *> &top_keys) -> bool {
+          absl::flat_hash_set<const char *> &top_keys, float score) -> bool {
     if (neighbors.size() >= max_keys) {
       fetch_limited = true;
       return false;
     }
-    neighbors.emplace_back(indexes::Neighbor{key, 0.0f});
+    neighbors.emplace_back(indexes::Neighbor{key, score});
     return true;
   };
   // Cannot skip evaluation if the query contains unsolved composed operations.
@@ -639,6 +642,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
         }
       }
     }
+    // Sort by score descending (higher = more relevant) before LIMIT is applied.
+    std::stable_sort(neighbors.begin(), neighbors.end(),
+                     [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
+                       return a.score > b.score;
+                     });
     return neighbors;
   }
   EvaluatePrefilteredKeys(parameters, entries_fetchers,
@@ -647,6 +655,11 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchNonVectorQuery(
   if (fetch_limited) {
     nonvector_results_fetched_limited_count.Increment();
   }
+  // Sort by score descending before LIMIT is applied.
+  std::stable_sort(neighbors.begin(), neighbors.end(),
+                   [](const indexes::Neighbor& a, const indexes::Neighbor& b) {
+                     return a.score > b.score;
+                   });
   return neighbors;
 }
 
