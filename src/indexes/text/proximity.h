@@ -91,6 +91,12 @@ class ProximityIterator : public TextIterator {
   absl::InlinedVector<std::pair<Position, size_t>,
                       kProximityTermsInlineCapacity>
       pos_with_idx_;
+  // Heap for key convergence: tracks (key, iter_index), min-heap by key.
+  valkey_search::InlinedPriorityQueue<std::pair<Key, size_t>,
+                                      kProximityTermsInlineCapacity>
+      key_heap_;
+  // Tracks the current maximum key across all iterators in the heap.
+  Key max_key_;
   // Flag used to skip positional checks. This is used when performing
   // an AND on text predicates without any positional constraints.
   bool skip_positional_checks_;

@@ -78,74 +78,102 @@ const Key& ProximityIterator::CurrentKey() const {
 }
 
 bool ProximityIterator::NextKey() {
-  // On the second call onwards, advance any text iterators that are still
-  // sitting on the old key.
-  auto advance = [&]() -> void {
-    for (auto& iter : iters_) {
-      if (!iter->DoneKeys() && iter->CurrentKey() == current_key_) {
-        iter->NextKey();
+  if (current_key_) {
+    // Advance all iterators on current key, rebuild heap
+    key_heap_.clear();
+    max_key_ = nullptr;
+    for (size_t i = 0; i < iters_.size(); ++i) {
+      if (!iters_[i]->DoneKeys() && iters_[i]->CurrentKey() == current_key_) {
+        iters_[i]->NextKey();
+      }
+      if (!iters_[i]->DoneKeys()) {
+        const Key& k = iters_[i]->CurrentKey();
+        key_heap_.push_back_unsorted(k, i);
+        if (!max_key_ || k > max_key_) max_key_ = k;
       }
     }
-  };
-  if (current_key_) {
-    advance();
+  } else {
+    // First call - populate heap
+    key_heap_.clear();
+    max_key_ = nullptr;
+    for (size_t i = 0; i < iters_.size(); ++i) {
+      if (!iters_[i]->DoneKeys()) {
+        const Key& k = iters_[i]->CurrentKey();
+        key_heap_.push_back_unsorted(k, i);
+        if (!max_key_ || k > max_key_) max_key_ = k;
+      }
+    }
   }
-  while (!DoneKeys()) {
-    // 1) Move to the next common key amongst all text iterators.
+  while (key_heap_.size() == iters_.size()) {
     if (FindCommonKey()) {
       current_position_ = std::nullopt;
       current_field_mask_ = 0ULL;
-      // 2) Skip positional checks if requested. Otherwise,
-      // move to the next valid position combination across all text
-      // iterators.
-      // Exit, if no key with a valid position combination is found.
       if (skip_positional_checks_) {
         return true;
       } else if (NextPosition()) {
         return true;
       }
+      // Position check failed - advance all on current key, rebuild heap
+      key_heap_.clear();
+      max_key_ = nullptr;
+      for (size_t i = 0; i < iters_.size(); ++i) {
+        if (!iters_[i]->DoneKeys() && iters_[i]->CurrentKey() == current_key_) {
+          iters_[i]->NextKey();
+        }
+        if (!iters_[i]->DoneKeys()) {
+          const Key& k = iters_[i]->CurrentKey();
+          key_heap_.push_back_unsorted(k, i);
+          if (!max_key_ || k > max_key_) max_key_ = k;
+        }
+      }
     }
-    // Otherwise, loop and try again.
-    advance();
   }
   current_key_ = nullptr;
   return false;
 }
 
 bool ProximityIterator::FindCommonKey() {
-  // 1) Validate children and compute min/max among current keys
-  const Key* min_key = &iters_[0]->CurrentKey();
-  const Key* max_key = min_key;
-  for (size_t i = 1; i < iters_.size(); ++i) {
-    const Key& k = iters_[i]->CurrentKey();
-    if (k < *min_key) min_key = &k;
-    if (k > *max_key) max_key = &k;
+  // Converge iterators using heap: advance minimum toward max each step.
+  key_heap_.heapify();
+  while (true) {
+    const Key& min_key = key_heap_.min().first;
+    if (min_key == max_key_) {
+      current_key_ = max_key_;
+      return true;
+    }
+    size_t min_idx = key_heap_.min().second;
+    key_heap_.pop_min();
+    iters_[min_idx]->SeekForwardKey(max_key_);
+    if (iters_[min_idx]->DoneKeys()) {
+      return false;
+    }
+    const Key& new_key = iters_[min_idx]->CurrentKey();
+    key_heap_.push_back_unsorted(new_key, min_idx);
+    key_heap_.heapify();
+    if (new_key > max_key_) {
+      max_key_ = new_key;
+    }
   }
-  // 2) If min == max, we found a common key
-  if (*min_key == *max_key) {
-    current_key_ = *max_key;
-    return true;
-  }
-  // 3) Advance all iterators that are strictly behind the current max_key
-  for (auto& iter : iters_) {
-    iter->SeekForwardKey(*max_key);
-  }
-  return false;
 }
 
 bool ProximityIterator::SeekForwardKey(const Key& target_key) {
-  // If current key is already >= target_key, no need to seek
   if (current_key_ && current_key_ >= target_key) {
     return true;
   }
-  // Skip all keys less than target_key for all iterators
-  for (auto& iter : iters_) {
-    if (!iter->DoneKeys() && iter->CurrentKey() < target_key) {
-      iter->SeekForwardKey(target_key);
+  // Seek all iterators and rebuild heap
+  key_heap_.clear();
+  max_key_ = nullptr;
+  for (size_t i = 0; i < iters_.size(); ++i) {
+    if (!iters_[i]->DoneKeys() && iters_[i]->CurrentKey() < target_key) {
+      iters_[i]->SeekForwardKey(target_key);
+    }
+    if (!iters_[i]->DoneKeys()) {
+      const Key& k = iters_[i]->CurrentKey();
+      key_heap_.push_back_unsorted(k, i);
+      if (!max_key_ || k > max_key_) max_key_ = k;
     }
   }
-  // Find next valid key/position combination
-  while (!DoneKeys()) {
+  while (key_heap_.size() == iters_.size()) {
     if (FindCommonKey()) {
       current_position_ = std::nullopt;
       current_field_mask_ = 0ULL;
@@ -154,11 +182,18 @@ bool ProximityIterator::SeekForwardKey(const Key& target_key) {
       } else if (NextPosition()) {
         return true;
       }
-    }
-    // Advance past current key and try again
-    for (auto& iter : iters_) {
-      if (!iter->DoneKeys() && iter->CurrentKey() == current_key_) {
-        iter->NextKey();
+      // Advance past current key, rebuild heap
+      key_heap_.clear();
+      max_key_ = nullptr;
+      for (size_t i = 0; i < iters_.size(); ++i) {
+        if (!iters_[i]->DoneKeys() && iters_[i]->CurrentKey() == current_key_) {
+          iters_[i]->NextKey();
+        }
+        if (!iters_[i]->DoneKeys()) {
+          const Key& k = iters_[i]->CurrentKey();
+          key_heap_.push_back_unsorted(k, i);
+          if (!max_key_ || k > max_key_) max_key_ = k;
+        }
       }
     }
   }
