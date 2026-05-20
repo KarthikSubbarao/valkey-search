@@ -132,10 +132,15 @@ class Numeric : public IndexBase {
         const EntriesRange& entries_range,
         const std::optional<EntriesRange>& additional_entries_range,
         const InternedStringSet* untracked_keys, bool sorted);
+    // EntriesFetcherIteratorBase interface
     bool Done() const override;
     void Next() override;
     const InternedStringPtr& operator*() const override;
     bool SeekForwardKey(const InternedStringPtr& target) override;
+    // TextIterator interface — direct implementations (no delegation)
+    bool DoneKeys() const override;
+    const InternedStringPtr& CurrentKey() const override;
+    bool NextKey() override;
 
    private:
     using SetIter = BTreeNumericIndex::SetType::const_iterator;
@@ -154,7 +159,8 @@ class Numeric : public IndexBase {
     std::optional<SetIter> keys_iter_;
     bool in_additional_range_;
 
-    InternedStringPtr current_key_;
+    InternedStringPtr current_key_;  // unused in unsorted mode
+    bool done_;
     bool negate_;
     const InternedStringSet* untracked_keys_;
     std::optional<InternedStringSet::const_iterator> untracked_keys_iter_;

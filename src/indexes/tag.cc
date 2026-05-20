@@ -262,6 +262,7 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     : tree_(tree),
       sorted_(sorted),
       sorted_idx_(0),
+      done_(false),
       negate_(negate),
       entries_(entries),
       untracked_keys_(untracked_keys) {
@@ -271,7 +272,7 @@ Tag::EntriesFetcherIterator::EntriesFetcherIterator(
     for (auto* node : entries_) {
       if (node && node->value.has_value()) {
         for (const auto& key : node->value.value()) {
-          sorted_keys_.push_back(key);
+          sorted_keys_.push_back(InternedStringPtr::Borrow(key));
         }
       }
     }
@@ -293,7 +294,6 @@ void Tag::EntriesFetcherIterator::LinearAdvance() {
   if (keys_iter_.has_value()) {
     ++keys_iter_.value();
     if (keys_iter_.value() != keys_end_.value()) {
-      current_key_ = *keys_iter_.value();
       return;
     }
     ++nodes_iter_;
@@ -304,48 +304,62 @@ void Tag::EntriesFetcherIterator::LinearAdvance() {
     if (node && node->value.has_value() && !node->value.value().empty()) {
       keys_iter_ = node->value.value().begin();
       keys_end_ = node->value.value().end();
-      current_key_ = *keys_iter_.value();
       return;
     }
     ++nodes_iter_;
   }
-  current_key_ = {};
+  done_ = true;
 }
 
-bool Tag::EntriesFetcherIterator::Done() const { return !current_key_; }
+bool Tag::EntriesFetcherIterator::Done() const {
+  if (sorted_) return sorted_idx_ >= sorted_keys_.size();
+  return done_;
+}
 
 void Tag::EntriesFetcherIterator::Next() {
-  if (!current_key_) return;
   if (sorted_) {
     ++sorted_idx_;
-    if (sorted_idx_ < sorted_keys_.size()) {
-      current_key_ = sorted_keys_[sorted_idx_];
-    } else {
-      current_key_ = {};
-    }
   } else {
     LinearAdvance();
   }
 }
 
 const InternedStringPtr& Tag::EntriesFetcherIterator::operator*() const {
-  return current_key_;
+  if (sorted_) return sorted_keys_[sorted_idx_];
+  return *keys_iter_.value();
+}
+
+bool Tag::EntriesFetcherIterator::DoneKeys() const {
+  if (sorted_) return sorted_idx_ >= sorted_keys_.size();
+  return done_;
+}
+
+const InternedStringPtr& Tag::EntriesFetcherIterator::CurrentKey() const {
+  if (sorted_) return sorted_keys_[sorted_idx_];
+  return *keys_iter_.value();
+}
+
+bool Tag::EntriesFetcherIterator::NextKey() {
+  if (sorted_) {
+    ++sorted_idx_;
+  } else {
+    LinearAdvance();
+  }
+  return !DoneKeys();
 }
 
 bool Tag::EntriesFetcherIterator::SeekForwardKey(
     const InternedStringPtr& target) {
   CHECK(sorted_) << "SeekForwardKey requires sorted mode";
-  if (!current_key_) return false;
-  if (current_key_ >= target) return true;
+  if (Done()) return false;
+  if (sorted_keys_[sorted_idx_] >= target) return true;
   auto it = std::lower_bound(sorted_keys_.begin() + sorted_idx_,
                               sorted_keys_.end(), target);
   if (it == sorted_keys_.end()) {
-    current_key_ = {};
     sorted_idx_ = sorted_keys_.size();
     return false;
   }
   sorted_idx_ = it - sorted_keys_.begin();
-  current_key_ = sorted_keys_[sorted_idx_];
   return true;
 }
 

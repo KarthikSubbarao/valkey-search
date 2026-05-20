@@ -154,6 +154,7 @@ Numeric::EntriesFetcherIterator::EntriesFetcherIterator(
     const InternedStringSet* untracked_keys, bool sorted)
     : sorted_(sorted),
       sorted_idx_(0),
+      done_(false),
       entries_range_ptr_(&entries_range),
       additional_entries_range_ptr_(&additional_entries_range),
       in_additional_range_(false),
@@ -163,13 +164,10 @@ Numeric::EntriesFetcherIterator::EntriesFetcherIterator(
     // Collect all keys into a vector and sort for pointer order.
     for (auto it = entries_range.first; it != entries_range.second; ++it) {
       for (const auto& key : it->second) {
-        sorted_keys_.push_back(key);
+        sorted_keys_.push_back(InternedStringPtr::Borrow(key));
       }
     }
     std::sort(sorted_keys_.begin(), sorted_keys_.end());
-    if (!sorted_keys_.empty()) {
-      current_key_ = sorted_keys_[0];
-    }
   } else {
     bucket_iter_ = entries_range.first;
     bucket_end_ = entries_range.second;
@@ -181,7 +179,6 @@ void Numeric::EntriesFetcherIterator::LinearAdvance() {
   if (keys_iter_.has_value()) {
     ++keys_iter_.value();
     if (keys_iter_.value() != bucket_iter_->second.end()) {
-      current_key_ = *keys_iter_.value();
       return;
     }
     ++bucket_iter_;
@@ -193,57 +190,70 @@ void Numeric::EntriesFetcherIterator::LinearAdvance() {
       bucket_iter_ = additional_entries_range_ptr_->value().first;
       bucket_end_ = additional_entries_range_ptr_->value().second;
     } else {
-      current_key_ = {};
+      done_ = true;
       return;
     }
   }
   while (bucket_iter_ != bucket_end_) {
     if (!bucket_iter_->second.empty()) {
       keys_iter_ = bucket_iter_->second.begin();
-      current_key_ = *keys_iter_.value();
       return;
     }
     ++bucket_iter_;
   }
-  current_key_ = {};
+  done_ = true;
 }
 
-bool Numeric::EntriesFetcherIterator::Done() const { return !current_key_; }
+bool Numeric::EntriesFetcherIterator::Done() const {
+  if (sorted_) return sorted_idx_ >= sorted_keys_.size();
+  return done_;
+}
 
 void Numeric::EntriesFetcherIterator::Next() {
-  if (!current_key_) return;
   if (sorted_) {
     ++sorted_idx_;
-    if (sorted_idx_ < sorted_keys_.size()) {
-      current_key_ = sorted_keys_[sorted_idx_];
-    } else {
-      current_key_ = {};
-    }
   } else {
     LinearAdvance();
   }
 }
 
 const InternedStringPtr& Numeric::EntriesFetcherIterator::operator*() const {
-  return current_key_;
+  if (sorted_) return sorted_keys_[sorted_idx_];
+  return *keys_iter_.value();
 }
 
 bool Numeric::EntriesFetcherIterator::SeekForwardKey(
     const InternedStringPtr& target) {
   CHECK(sorted_) << "SeekForwardKey requires sorted mode";
-  if (!current_key_) return false;
-  if (current_key_ >= target) return true;
-  // Binary search forward in sorted vector.
+  if (Done()) return false;
+  if (sorted_keys_[sorted_idx_] >= target) return true;
   auto it = std::lower_bound(sorted_keys_.begin() + sorted_idx_,
                               sorted_keys_.end(), target);
   if (it == sorted_keys_.end()) {
-    current_key_ = {};
     sorted_idx_ = sorted_keys_.size();
     return false;
   }
   sorted_idx_ = it - sorted_keys_.begin();
-  current_key_ = sorted_keys_[sorted_idx_];
   return true;
+}
+
+bool Numeric::EntriesFetcherIterator::DoneKeys() const {
+  if (sorted_) return sorted_idx_ >= sorted_keys_.size();
+  return done_;
+}
+
+const InternedStringPtr& Numeric::EntriesFetcherIterator::CurrentKey() const {
+  if (sorted_) return sorted_keys_[sorted_idx_];
+  return *keys_iter_.value();
+}
+
+bool Numeric::EntriesFetcherIterator::NextKey() {
+  if (sorted_) {
+    ++sorted_idx_;
+  } else {
+    LinearAdvance();
+  }
+  return !DoneKeys();
 }
 
 size_t Numeric::EntriesFetcher::Size() const { return size_; }

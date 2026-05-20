@@ -88,6 +88,10 @@ class Tag : public IndexBase {
     void Next() override;
     const InternedStringPtr& operator*() const override;
     bool SeekForwardKey(const InternedStringPtr& target) override;
+    // Direct overrides — no delegation through base class.
+    bool DoneKeys() const override;
+    const InternedStringPtr& CurrentKey() const override;
+    bool NextKey() override;
 
    private:
     using SetIter = PatriciaTreeIndex::SetType::const_iterator;
@@ -110,7 +114,8 @@ class Tag : public IndexBase {
     std::optional<SetIter> keys_end_;
 
     // Current key being yielded.
-    InternedStringPtr current_key_;
+    InternedStringPtr current_key_;  // unused in unsorted mode
+    bool done_;
 
     bool negate_;
     absl::flat_hash_set<PatriciaNodeIndex*>& entries_;

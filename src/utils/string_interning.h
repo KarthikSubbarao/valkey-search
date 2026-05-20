@@ -103,8 +103,8 @@ class InternedStringPtr {
  public:
   InternedStringPtr() = default;
   InternedStringPtr(const InternedStringPtr &other) : impl_(other.impl_) {
-    if (impl_) {
-      impl_->IncrementRefCount();
+    if (Ptr() && !IsBorrowed()) {
+      Ptr()->IncrementRefCount();
     }
   }
   InternedStringPtr(InternedStringPtr &&other) noexcept : impl_(other.impl_) {
@@ -112,20 +112,20 @@ class InternedStringPtr {
   }
   InternedStringPtr &operator=(const InternedStringPtr &other) {
     if (this != &other) {
-      if (impl_) {
-        impl_->DecrementRefCount();
+      if (Ptr() && !IsBorrowed()) {
+        Ptr()->DecrementRefCount();
       }
       impl_ = other.impl_;
-      if (impl_) {
-        impl_->IncrementRefCount();
+      if (Ptr() && !IsBorrowed()) {
+        Ptr()->IncrementRefCount();
       }
     }
     return *this;
   }
   InternedStringPtr &operator=(InternedStringPtr &&other) noexcept {
     if (this != &other) {
-      if (impl_) {
-        impl_->DecrementRefCount();
+      if (Ptr() && !IsBorrowed()) {
+        Ptr()->DecrementRefCount();
       }
       impl_ = other.impl_;
       other.impl_ = nullptr;
@@ -135,32 +135,72 @@ class InternedStringPtr {
 
   InternedStringPtr &operator=(void *other) noexcept {
     CHECK(!other);  // Only nullptr is allowed
-    if (impl_) {
-      impl_->DecrementRefCount();
+    if (Ptr() && !IsBorrowed()) {
+      Ptr()->DecrementRefCount();
     }
     impl_ = nullptr;
     return *this;
   }
 
-  auto operator<=>(const InternedStringPtr &other) const = default;
+  auto operator<=>(const InternedStringPtr &other) const {
+    return Ptr() <=> other.Ptr();
+  }
+  bool operator==(const InternedStringPtr &other) const {
+    return Ptr() == other.Ptr();
+  }
 
-  size_t Hash() const { return absl::HashOf(impl_); }
+  size_t Hash() const { return absl::HashOf(Ptr()); }
 
-  InternedString &operator*() { return *impl_; }
-  InternedString *operator->() { return impl_; }
-  operator bool() const { return impl_ != nullptr; }
-  const InternedString &operator*() const { return *impl_; }
-  const InternedString *operator->() const { return impl_; }
+  InternedString &operator*() { return *Ptr(); }
+  InternedString *operator->() { return Ptr(); }
+  operator bool() const { return Ptr() != nullptr; }
+  const InternedString &operator*() const { return *Ptr(); }
+  const InternedString *operator->() const { return Ptr(); }
   ~InternedStringPtr() {
-    if (impl_) {
-      impl_->DecrementRefCount();
+    if (Ptr() && !IsBorrowed()) {
+      Ptr()->DecrementRefCount();
     }
     impl_ = nullptr;
   }
 
-  size_t RefCount() const { return impl_ ? impl_->RefCount() : 0; }
+  size_t RefCount() const { return Ptr() ? Ptr()->RefCount() : 0; }
+
+  // Create a non-owning (borrowed) pointer that skips ref counting.
+  // Caller must guarantee the InternedString outlives this pointer.
+  // IMPORTANT: Every borrowed pointer (and any copies of it) MUST have
+  // Materialize() called before it leaves the scope protected by the lock
+  // that prevents the underlying string from being freed.
+  static InternedStringPtr Borrow(const InternedStringPtr &other) {
+    InternedStringPtr p;
+    p.impl_ = reinterpret_cast<InternedString *>(
+        reinterpret_cast<uintptr_t>(other.Ptr()) | kBorrowedBit);
+    return p;
+  }
+  static InternedStringPtr Borrow(InternedStringPtr &&other) = delete;
+  static InternedStringPtr Borrow(const InternedStringPtr &&other) = delete;
+
+  // Convert borrowed pointer to owning (increments ref count).
+  void Materialize() {
+    if (Ptr() && IsBorrowed()) {
+      Ptr()->IncrementRefCount();
+      impl_ = Ptr();  // clears the borrowed bit
+    }
+  }
 
  private:
+  static constexpr uintptr_t kBorrowedBit = 1;
+  static_assert(alignof(InternedString) >= 2,
+                "InternedString must be at least 2-byte aligned for pointer "
+                "tagging to be safe");
+
+  InternedString *Ptr() const {
+    return reinterpret_cast<InternedString *>(
+        reinterpret_cast<uintptr_t>(impl_) & ~kBorrowedBit);
+  }
+  bool IsBorrowed() const {
+    return reinterpret_cast<uintptr_t>(impl_) & kBorrowedBit;
+  }
+
   InternedStringPtr(InternedString *impl) : impl_(impl) {}
   InternedString *impl_{nullptr};
   friend class StringInternStore;

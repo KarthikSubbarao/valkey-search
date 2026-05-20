@@ -14,10 +14,12 @@
 #include "absl/base/no_destructor.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/functional/any_invocable.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
 #include "src/index_schema.pb.h"
+#include "src/indexes/text/text_iterator.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/managed_pointers.h"
@@ -80,14 +82,37 @@ class IndexBase {
   IndexerType indexer_type_{IndexerType::kNone};
 };
 
-class EntriesFetcherIteratorBase {
+class EntriesFetcherBase;  // forward declaration
+
+class EntriesFetcherIteratorBase : public text::TextIterator {
  public:
   virtual bool Done() const = 0;
   virtual void Next() = 0;
   virtual const InternedStringPtr& operator*() const = 0;
-  // Advance to the first key >= target. Returns true if such a key exists.
-  virtual bool SeekForwardKey(const InternedStringPtr& target) = 0;
-  virtual ~EntriesFetcherIteratorBase() = default;
+
+  // TextIterator interface — delegates to Done/Next/operator*.
+  bool DoneKeys() const override { return Done(); }
+  const InternedStringPtr& CurrentKey() const override { return **this; }
+  bool NextKey() override { Next(); return !Done(); }
+  bool SeekForwardKey(const InternedStringPtr& target) override = 0;
+
+  // No positions — key-only iteration.
+  text::FieldMaskPredicate QueryFieldMask() const override { return ~0ULL; }
+  bool DonePositions() const override { return true; }
+  const text::PositionRange& CurrentPosition() const override {
+    CHECK(false) << "CurrentPosition() called on key-only iterator";
+    __builtin_unreachable();
+  }
+  bool NextPosition() override { return false; }
+  bool SeekForwardPosition(text::Position) override { return false; }
+  text::FieldMaskPredicate CurrentFieldMask() const override { return ~0ULL; }
+  bool HasPositions() const override { return false; }
+  bool IsIteratorValid() const override { return !Done(); }
+
+  // Optional: keeps the fetcher alive when iterator outlives its creator.
+  std::unique_ptr<EntriesFetcherBase> owned_fetcher_;
+
+  ~EntriesFetcherIteratorBase() override = default;
 };
 
 class EntriesFetcherBase {
