@@ -374,11 +374,59 @@ void ProcessNeighborsForReply(
     ValkeyModuleCtx *ctx, const AttributeDataType &attribute_data_type,
     std::vector<indexes::Neighbor> &neighbors,
     const query::SearchParameters &parameters,
-    const std::optional<std::string> &vector_identifier) {
+    const std::optional<std::string> &vector_identifier,
+    bool allow_raw_reply) {
   const auto max_content_size =
       options::GetMaxSearchResultRecordSize().GetValue();
   const auto max_content_fields =
       options::GetMaxSearchResultFieldsCount().GetValue();
+  // Hoisted once for the whole batch.
+  vmsdk::ValkeySelectDbGuard select_db_guard(ctx, parameters.db_num);
+  // Fast path eligibility: hash content via ScanKeyRawPinned -> pinned shells
+  // -> ReplyWithString -> BULK_STR_REF (zero-copy all the way). Applies to
+  // plain, vector (score prefix added at reply time), and RETURN-subset
+  // queries. Now also SORTBY: we pin the sort field and order by it, then emit
+  // the (zero-copy) content -- only the sort key is inspected, never copied.
+  // Excludes JSON (values aren't borrowable hash sds) and any computed/
+  // transformed reply value (FT.AGGREGATE REDUCE/APPLY) -- those have no stored
+  // buffer to borrow. filter_identifiers being
+  // non-empty is OK -- the index already filtered.
+  // NOTE (staleness): like the original plain fast path, this skips VerifyFilter
+  // (the seq-id re-check). A doc mutated out of the match set between the worker
+  // scan and the reply is still returned. This gap pre-existed for plain
+  // content; it now also covers vector/RETURN. Acceptable only while the
+  // point-in-time snapshot semantics are acceptable for FT.SEARCH content.
+  // VS_NO_ZEROCOPY (env) forces the standard FetchAllRecords copy path -- the
+  // exact path a build without zero-copy takes -- for controlled A/B baselines.
+  static const bool kZeroCopyDisabled = (std::getenv("VS_NO_ZEROCOPY") != nullptr);
+  const bool raw_eligible =
+      !kZeroCopyDisabled &&
+      allow_raw_reply &&
+      ValkeyModule_ScanKeyRawPinned != nullptr &&
+      attribute_data_type.ToProto() ==
+          data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH;
+  // For RETURN <fields>, pin only the requested identifiers (not the whole
+  // doc). When SORTBY is present we ALSO pin the sort field so ApplySorting can
+  // order by it -- even if it is not in RETURN it is read for sorting, not
+  // emitted. SORTBY with no RETURN pins all fields, so the sort field is
+  // already among them. The sort key is a pinned reference, not a copy: content
+  // stays zero-copy; only the small value we must *inspect* to order is read.
+  // Built once; string_views reference storage owned by `parameters` /
+  // `raw_sortby_identifier`.
+  const bool raw_has_return = !parameters.return_attributes.empty();
+  std::string raw_sortby_identifier;  // must outlive raw_wanted's string_views
+  absl::flat_hash_set<absl::string_view> raw_wanted;
+  if (raw_eligible && raw_has_return) {
+    for (const auto &ra : parameters.return_attributes) {
+      raw_wanted.insert(vmsdk::ToStringView(ra.identifier.get()));
+    }
+    if (parameters.sortby_parameter.has_value()) {
+      auto id =
+          parameters.index_schema->GetIdentifier(parameters.sortby_parameter->field);
+      raw_sortby_identifier = id.ok() ? *id : parameters.sortby_parameter->field;
+      raw_wanted.insert(raw_sortby_identifier);
+    }
+  }
   for (auto &neighbor : neighbors) {
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
@@ -390,6 +438,49 @@ void ProcessNeighborsForReply(
     // Remote neighbors are never checked since they always have content.
     if (!CheckSlotOwnership(ctx, neighbor.external_id->Str())) {
       // Skip this neighbor - we don't own its slot.
+      continue;
+    }
+    if (raw_eligible) {
+      auto key_str =
+          vmsdk::MakeUniqueValkeyString(neighbor.external_id->Str());
+      auto key_obj = vmsdk::MakeUniqueValkeyOpenKey(
+          ctx, key_str.get(),
+          VALKEYMODULE_OPEN_KEY_NOEXPIRE | VALKEYMODULE_READ);
+      if (!key_obj) {
+        continue;
+      }
+      mstime_t expire = ValkeyModule_GetExpire(key_obj.get());
+      if (expire != VALKEYMODULE_NO_EXPIRE && expire <= 0) {
+        continue;
+      }
+      // Vector parity with FetchAllRecords: drop docs missing the vector field
+      // so the KNN reply set matches the copy path exactly.
+      if (vector_identifier.has_value() &&
+          !HashHasRecord(key_obj.get(), vector_identifier.value())) {
+        continue;
+      }
+      auto raw = FetchAllHashFieldsRawPinned(
+          key_obj.get(), raw_has_return ? &raw_wanted : nullptr);
+      if (raw.size() > max_content_fields) {
+        ++Metrics::GetStats().query_result_record_dropped_cnt;
+        continue;
+      }
+      size_t total_size = 0;
+      bool size_exceeded = false;
+      for (const auto &item : raw) {
+        total_size += item.first.size();
+        size_t vlen;
+        const char *vptr = ValkeyModule_StringPtrLen(item.second.get(), &vlen);
+        total_size += vlen;
+        if (total_size > max_content_size) {
+          ++Metrics::GetStats().query_result_record_dropped_cnt;
+          size_exceeded = true;
+          break;
+        }
+      }
+      if (!size_exceeded) {
+        neighbor.raw_contents = std::move(raw);
+      }
       continue;
     }
     auto content = GetContent(ctx, attribute_data_type, parameters, neighbor,
@@ -435,7 +526,8 @@ void ProcessNeighborsForReply(
   neighbors.erase(
       std::remove_if(neighbors.begin(), neighbors.end(),
                      [](const indexes::Neighbor &neighbor) {
-                       return !neighbor.attribute_contents.has_value();
+                       return !neighbor.attribute_contents.has_value() &&
+                              !neighbor.raw_contents.has_value();
                      }),
       neighbors.end());
 }

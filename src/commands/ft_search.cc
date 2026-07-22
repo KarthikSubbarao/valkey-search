@@ -84,14 +84,29 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
   for (auto i = range.start_index; i < range.end_index; ++i) {
     ValkeyModule_ReplyWithString(
         ctx, vmsdk::MakeUniqueValkeyString(*neighbors[i].external_id).get());
+    const bool use_raw = neighbors[i].raw_contents.has_value();
     if (parameters.return_attributes.empty()) {
-      ValkeyModule_ReplyWithArray(
-          ctx, 2 * neighbors[i].attribute_contents.value().size() + 2);
-      ReplyScore(ctx, *parameters.score_as, neighbors[i]);
-      for (auto &attribute_content : neighbors[i].attribute_contents.value()) {
-        ValkeyModule_ReplyWithString(ctx,
-                                     attribute_content.second.GetIdentifier());
-        ValkeyModule_ReplyWithString(ctx, attribute_content.second.value.get());
+      if (use_raw) {
+        // Zero-copy pinned content + score prefix (BULK_STR_REF).
+        const auto &raw = neighbors[i].raw_contents.value();
+        ValkeyModule_ReplyWithArray(ctx, 2 * raw.size() + 2);
+        ReplyScore(ctx, *parameters.score_as, neighbors[i]);
+        for (const auto &kv : raw) {
+          ValkeyModule_ReplyWithStringBuffer(ctx, kv.first.data(),
+                                             kv.first.size());
+          ValkeyModule_ReplyWithString(ctx, kv.second.get());
+        }
+      } else {
+        ValkeyModule_ReplyWithArray(
+            ctx, 2 * neighbors[i].attribute_contents.value().size() + 2);
+        ReplyScore(ctx, *parameters.score_as, neighbors[i]);
+        for (auto &attribute_content :
+             neighbors[i].attribute_contents.value()) {
+          ValkeyModule_ReplyWithString(
+              ctx, attribute_content.second.GetIdentifier());
+          ValkeyModule_ReplyWithString(ctx,
+                                       attribute_content.second.value.get());
+        }
       }
     } else {
       ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
@@ -103,12 +118,25 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
           ++cnt;
           continue;
         }
-        auto it = neighbors[i].attribute_contents.value().find(
-            vmsdk::ToStringView(return_attribute.identifier.get()));
-        if (it != neighbors[i].attribute_contents.value().end()) {
-          ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-          ValkeyModule_ReplyWithString(ctx, it->second.value.get());
-          ++cnt;
+        if (use_raw) {
+          // RETURN subset over pinned shells; score handled above.
+          auto ident = vmsdk::ToStringView(return_attribute.identifier.get());
+          for (const auto &kv : neighbors[i].raw_contents.value()) {
+            if (kv.first == ident) {
+              ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+              ValkeyModule_ReplyWithString(ctx, kv.second.get());
+              ++cnt;
+              break;
+            }
+          }
+        } else {
+          auto it = neighbors[i].attribute_contents.value().find(
+              vmsdk::ToStringView(return_attribute.identifier.get()));
+          if (it != neighbors[i].attribute_contents.value().end()) {
+            ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+            ValkeyModule_ReplyWithString(ctx, it->second.value.get());
+            ++cnt;
+          }
         }
       }
       ValkeyModule_ReplySetArrayLength(ctx, 2 * cnt);
@@ -116,20 +144,47 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
   }
 }
 
+// Reads the sort field value for a neighbor, preferring the zero-copy pinned
+// shells (raw_contents, keyed by the hash field identifier) and falling back to
+// the copy-path attribute_contents (keyed by the sort field/alias). Returns
+// false when the field is absent so callers can preserve "missing sorts last".
+bool TryGetSortFieldValue(const indexes::Neighbor &neighbor,
+                          const SearchCommand &command, std::string *out) {
+  if (!command.sortby_parameter.has_value()) {
+    return false;
+  }
+  absl::string_view field = command.sortby_parameter->field;
+  if (neighbor.raw_contents.has_value()) {
+    auto id = command.index_schema->GetIdentifier(field);
+    const std::string ident = id.ok() ? *id : std::string(field);
+    for (const auto &kv : neighbor.raw_contents.value()) {
+      if (kv.first == ident) {
+        size_t len;
+        const char *p = ValkeyModule_StringPtrLen(kv.second.get(), &len);
+        out->assign(p, len);
+        return true;
+      }
+    }
+    return false;
+  }
+  if (neighbor.attribute_contents.has_value()) {
+    auto it = neighbor.attribute_contents->find(field);
+    if (it != neighbor.attribute_contents->end()) {
+      *out = std::string(vmsdk::ToStringView(it->second.value.get()));
+      return true;
+    }
+  }
+  return false;
+}
+
 // Helper function to get the sort key value for a neighbor
 std::string GetSortKeyValue(const indexes::Neighbor &neighbor,
                             const SearchCommand &command) {
-  if (!command.sortby_parameter.has_value() ||
-      !neighbor.attribute_contents.has_value()) {
-    return "";
+  std::string v;
+  if (TryGetSortFieldValue(neighbor, command, &v)) {
+    return v;
   }
-
-  auto it = neighbor.attribute_contents->find(command.sortby_parameter->field);
-  if (it == neighbor.attribute_contents->end()) {
-    return "";
-  }
-
-  return std::string(vmsdk::ToStringView(it->second.value.get()));
+  return "";
 }
 
 // Handle non-vector queries by processing the neighbors and replying with the
@@ -156,6 +211,37 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
       std::string prefixed_value = "#" + sort_key_value;
       ValkeyModule_ReplyWithString(
           ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());
+    }
+
+    // Zero-copy pinned path: reply directly with pinned shells (BULK_STR_REF).
+    if (neighbors[i].raw_contents.has_value()) {
+      const auto &raw = neighbors[i].raw_contents.value();
+      if (command.return_attributes.empty()) {
+        ValkeyModule_ReplyWithArray(ctx, 2 * raw.size());
+        for (const auto &kv : raw) {
+          ValkeyModule_ReplyWithStringBuffer(ctx, kv.first.data(),
+                                             kv.first.size());
+          ValkeyModule_ReplyWithString(ctx, kv.second.get());
+        }
+      } else {
+        // RETURN subset: emit alias + pinned value, preserving RETURN order.
+        // raw only contains the requested fields (pinned selectively).
+        ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
+        size_t cnt = 0;
+        for (const auto &return_attribute : command.return_attributes) {
+          auto ident = vmsdk::ToStringView(return_attribute.identifier.get());
+          for (const auto &kv : raw) {
+            if (kv.first == ident) {
+              ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
+              ValkeyModule_ReplyWithString(ctx, kv.second.get());
+              ++cnt;
+              break;
+            }
+          }
+        }
+        ValkeyModule_ReplySetArrayLength(ctx, 2 * cnt);
+      }
+      continue;
     }
 
     const auto &contents = neighbors[i].attribute_contents.value();
@@ -201,33 +287,25 @@ void ApplySorting(std::vector<indexes::Neighbor> &neighbors,
       index_result.value()->GetIndexerType() == indexes::IndexerType::kNumeric;
   auto compare = [&](const indexes::Neighbor &a,
                      const indexes::Neighbor &b) -> bool {
-    if (!a.attribute_contents.has_value() ||
-        !b.attribute_contents.has_value()) {
-      return false;
+    std::string va, vb;
+    bool fa = TryGetSortFieldValue(a, parameters, &va);
+    bool fb = TryGetSortFieldValue(b, parameters, &vb);
+    if (!fa) {
+      return false;  // a's sort key missing -> orders after b
     }
-
-    auto it_a = a.attribute_contents->find(sortby.field);
-    auto it_b = b.attribute_contents->find(sortby.field);
-
-    if (it_a == a.attribute_contents->end()) {
-      return false;
+    if (!fb) {
+      return true;  // b's sort key missing -> a orders before b
     }
-    if (it_b == b.attribute_contents->end()) {
-      return true;
-    }
-
-    auto str_a = vmsdk::ToStringView(it_a->second.value.get());
-    auto str_b = vmsdk::ToStringView(it_b->second.value.get());
 
     expr::Value val_a, val_b;
     if (is_numeric) {
-      auto num_a = vmsdk::To<double>(str_a).value_or(0.0);
-      auto num_b = vmsdk::To<double>(str_b).value_or(0.0);
+      auto num_a = vmsdk::To<double>(va).value_or(0.0);
+      auto num_b = vmsdk::To<double>(vb).value_or(0.0);
       val_a = expr::Value(num_a);
       val_b = expr::Value(num_b);
     } else {
-      val_a = expr::Value(str_a);
-      val_b = expr::Value(str_b);
+      val_a = expr::Value(absl::string_view(va));
+      val_b = expr::Value(absl::string_view(vb));
     }
 
     auto cmp = expr::Compare(val_a, val_b);
@@ -286,7 +364,8 @@ absl::Status ProcessNeighborsForQuery(ValkeyModuleCtx *ctx,
 
   query::ProcessNeighborsForReply(
       ctx, command.index_schema->GetAttributeDataType(),
-      search_result.neighbors, command, vector_identifier);
+      search_result.neighbors, command, vector_identifier,
+      /*allow_raw_reply=*/true);
   // Adjust total count based on neighbors removed during processing
   // due to filtering or missing attributes.
   search_result.total_count -= (original_size - search_result.neighbors.size());

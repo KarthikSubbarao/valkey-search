@@ -109,6 +109,44 @@ absl::StatusOr<RecordsMap> HashAttributeDataType::FetchAllRecords(
   return std::move(callback_data.key_value_content);
 }
 
+namespace {
+// State for ScanKeyRawPinned: output list + optional field filter.
+struct RawPinnedScanState {
+  RawContentsList *out;
+  const absl::flat_hash_set<absl::string_view> *wanted;  // nullptr = all fields
+};
+// Callback for ScanKeyRawPinned: field as raw bytes, value as pinned shell.
+// Stores shell directly — NO copy. Reply via ReplyWithString for BULK_STR_REF.
+void RawPinnedScanCallback(ValkeyModuleKey *key, const char *field,
+                           size_t field_len, ValkeyModuleString *value_shell,
+                           void *privdata) {
+  auto *st = static_cast<RawPinnedScanState *>(privdata);
+  if (!field || field_len == 0 || !value_shell) return;
+  // RETURN subset: only pin fields the caller asked for.
+  if (st->wanted != nullptr &&
+      !st->wanted->contains(absl::string_view(field, field_len))) {
+    return;
+  }
+  // Retain the shell (incrRefCount) since core will decrRefCount after callback
+  ValkeyModule_RetainString(NULL, value_shell);
+  st->out->emplace_back(std::string(field, field_len),
+                        vmsdk::UniqueValkeyString(value_shell));
+}
+}  // namespace
+
+RawContentsList FetchAllHashFieldsRawPinned(
+    ValkeyModuleKey *open_key,
+    const absl::flat_hash_set<absl::string_view> *wanted) {
+  vmsdk::VerifyMainThread();
+  RawContentsList out;
+  RawPinnedScanState st{&out, wanted};
+  vmsdk::UniqueValkeyScanCursor cursor = vmsdk::MakeUniqueValkeyScanCursor();
+  while (ValkeyModule_ScanKeyRawPinned(open_key, cursor.get(),
+                                       RawPinnedScanCallback, &st)) {
+  }
+  return out;
+}
+
 absl::Status NormalizeJsonRecord(absl::string_view record,
                                  vmsdk::UniqueValkeyString &out_record) {
   if (!record.empty() && record[0] != '[') {
