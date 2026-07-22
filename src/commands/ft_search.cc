@@ -94,7 +94,7 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
         for (const auto &kv : raw) {
           ValkeyModule_ReplyWithStringBuffer(ctx, kv.first.data(),
                                              kv.first.size());
-          ValkeyModule_ReplyWithString(ctx, kv.second.get());
+          { size_t vlen; const char *vptr = ValkeyModule_StringPtrLen(kv.second.get(), &vlen); ValkeyModule_ReplyWithStringBuffer(ctx, vptr, vlen); }
         }
       } else {
         ValkeyModule_ReplyWithArray(
@@ -124,7 +124,7 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
           for (const auto &kv : neighbors[i].raw_contents.value()) {
             if (kv.first == ident) {
               ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-              ValkeyModule_ReplyWithString(ctx, kv.second.get());
+              { size_t vlen; const char *vptr = ValkeyModule_StringPtrLen(kv.second.get(), &vlen); ValkeyModule_ReplyWithStringBuffer(ctx, vptr, vlen); }
               ++cnt;
               break;
             }
@@ -221,7 +221,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
         for (const auto &kv : raw) {
           ValkeyModule_ReplyWithStringBuffer(ctx, kv.first.data(),
                                              kv.first.size());
-          ValkeyModule_ReplyWithString(ctx, kv.second.get());
+          { size_t vlen; const char *vptr = ValkeyModule_StringPtrLen(kv.second.get(), &vlen); ValkeyModule_ReplyWithStringBuffer(ctx, vptr, vlen); }
         }
       } else {
         // RETURN subset: emit alias + pinned value, preserving RETURN order.
@@ -233,7 +233,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
           for (const auto &kv : raw) {
             if (kv.first == ident) {
               ValkeyModule_ReplyWithString(ctx, return_attribute.alias.get());
-              ValkeyModule_ReplyWithString(ctx, kv.second.get());
+              { size_t vlen; const char *vptr = ValkeyModule_StringPtrLen(kv.second.get(), &vlen); ValkeyModule_ReplyWithStringBuffer(ctx, vptr, vlen); }
               ++cnt;
               break;
             }
