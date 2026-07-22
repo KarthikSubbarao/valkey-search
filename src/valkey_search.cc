@@ -1233,6 +1233,15 @@ absl::Status ValkeySearch::OnLoad(ValkeyModuleCtx *ctx,
                                   ValkeyModuleString **argv, int argc) {
   ctx_ = ValkeyModule_GetDetachedThreadSafeContext(ctx);
 
+  // Min-core-version gate: the zero-copy hash content path requires the core
+  // to export VM_ScanKeyRawBorrowed. Refuse to load on an older core rather
+  // than fall back at runtime.
+  if (ValkeyModule_ScanKeyRawBorrowed == nullptr) {
+    return absl::FailedPreconditionError(
+        "valkey-search requires a Valkey core that exports "
+        "VM_ScanKeyRawBorrowed (zero-copy hash scan); please upgrade the core");
+  }
+
   // Register a single module type for Aux load/save callbacks.
   VMSDK_RETURN_IF_ERROR(RegisterModuleType(ctx));
 

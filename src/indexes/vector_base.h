@@ -60,6 +60,9 @@ struct Neighbor {
   float distance;
   uint64_t sequence_number;
   std::optional<RecordsMap> attribute_contents;
+  // Zero-copy borrowed content for no-RETURN/no-SORTBY hash path.
+  // When set, serialize emits from this (ReplyWithStringBuffer on borrowed ptrs).
+  std::optional<RawContentsList> raw_contents;
   Neighbor() : distance(0.0f), sequence_number(0) {}
   Neighbor(const InternedStringPtr& external_id, float distance)
       : external_id(external_id), distance(distance), sequence_number(0) {}
@@ -73,13 +76,15 @@ struct Neighbor {
       : external_id(std::move(other.external_id)),
         distance(other.distance),
         sequence_number(other.sequence_number),
-        attribute_contents(std::move(other.attribute_contents)) {}
+        attribute_contents(std::move(other.attribute_contents)),
+        raw_contents(std::move(other.raw_contents)) {}
   Neighbor& operator=(Neighbor&& other) noexcept {
     if (this != &other) {
       external_id = std::move(other.external_id);
       distance = other.distance;
       sequence_number = other.sequence_number;
       attribute_contents = std::move(other.attribute_contents);
+      raw_contents = std::move(other.raw_contents);
     }
     return *this;
   }

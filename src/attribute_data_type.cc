@@ -133,6 +133,44 @@ RecordsMap HashAttributeDataType::FetchSpecificFields(
   return content;
 }
 
+namespace {
+// State for ScanKeyRawBorrowed: output list + optional field filter.
+struct RawBorrowedScanState {
+  RawContentsList *out;
+  const absl::flat_hash_set<absl::string_view> *wanted;  // nullptr = all fields
+};
+// Callback for ScanKeyRawBorrowed: field as raw bytes, value as raw borrowed
+// ptr+len. Stores directly — NO copy of value. Reply via
+// ReplyWithStringBuffer.
+void RawBorrowedScanCallback(ValkeyModuleKey *key, const char *field,
+                           size_t field_len, const char *value,
+                           size_t value_len, void *privdata) {
+  (void)key;
+  auto *st = static_cast<RawBorrowedScanState *>(privdata);
+  if (!field || field_len == 0 || !value) return;
+  // RETURN subset: only take fields the caller asked for.
+  if (st->wanted != nullptr &&
+      !st->wanted->contains(absl::string_view(field, field_len))) {
+    return;
+  }
+  st->out->emplace_back(std::string(field, field_len),
+                        std::make_pair(value, value_len));
+}
+}  // namespace
+
+RawContentsList FetchAllHashFieldsRawBorrowed(
+    ValkeyModuleKey *open_key,
+    const absl::flat_hash_set<absl::string_view> *wanted) {
+  vmsdk::VerifyMainThread();
+  RawContentsList out;
+  RawBorrowedScanState st{&out, wanted};
+  vmsdk::UniqueValkeyScanCursor cursor = vmsdk::MakeUniqueValkeyScanCursor();
+  while (ValkeyModule_ScanKeyRawBorrowed(open_key, cursor.get(),
+                                       RawBorrowedScanCallback, &st)) {
+  }
+  return out;
+}
+
 absl::Status NormalizeJsonRecord(absl::string_view record,
                                  vmsdk::UniqueValkeyString &out_record) {
   if (!record.empty() && record[0] != '[') {

@@ -959,6 +959,10 @@ typedef void (*ValkeyModuleScanKeyCB)(ValkeyModuleKey *key,
                                       ValkeyModuleString *field,
                                       ValkeyModuleString *value,
                                       void *privdata);
+typedef void (*ValkeyModuleScanKeyRawBorrowedCB)(ValkeyModuleKey *key,
+                                               const char *field, size_t field_len,
+                                               const char *value, size_t value_len,
+                                               void *privdata);
 typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
 typedef int (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
 typedef ValkeyModuleString *(*ValkeyModuleConfigGetStringFunc)(const char *name,
@@ -1594,6 +1598,10 @@ VALKEYMODULE_API int (*ValkeyModule_ScanKey)(ValkeyModuleKey *key,
                                              ValkeyModuleScanCursor *cursor,
                                              ValkeyModuleScanKeyCB fn,
                                              void *privdata) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ScanKeyRawBorrowed)(ValkeyModuleKey *key,
+                                                      ValkeyModuleScanCursor *cursor,
+                                                      ValkeyModuleScanKeyRawBorrowedCB fn,
+                                                      void *privdata) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetContextFlagsAll)() VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetKeyspaceNotificationFlagsAll)()
     VALKEYMODULE_ATTR;
@@ -2119,6 +2127,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver,
   VALKEYMODULE_GET_API(ScanCursorDestroy);
   VALKEYMODULE_GET_API(Scan);
   VALKEYMODULE_GET_API(ScanKey);
+  VALKEYMODULE_GET_API(ScanKeyRawBorrowed);
   VALKEYMODULE_GET_API(GetContextFlagsAll);
   VALKEYMODULE_GET_API(GetKeyspaceNotificationFlagsAll);
   VALKEYMODULE_GET_API(IsSubEventSupported);

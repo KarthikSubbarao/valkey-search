@@ -51,6 +51,21 @@ class RecordsMapValue {
 
 using RecordsMap = absl::flat_hash_map<absl::string_view, RecordsMapValue>;
 
+// Lightweight content storage: field name as std::string (no name robj),
+// value as borrowed ptr+len into the live hash sds (zero-copy safe).
+// Used for the no-RETURN/no-SORTBY/no-filter hash fast path.
+using RawContentsList =
+    std::vector<std::pair<std::string, std::pair<const char *, size_t>>>;
+
+// Scans hash fields via ValkeyModule_ScanKeyRawBorrowed.
+// Value is a borrowed pointer: reply via ValkeyModule_ReplyWithStringBuffer.
+// Main-thread only.
+// If `wanted` is non-null, only fields whose name is in the set are stored
+// (used for RETURN <fields> so we don't scan the whole doc).
+RawContentsList FetchAllHashFieldsRawBorrowed(
+    ValkeyModuleKey *open_key,
+    const absl::flat_hash_set<absl::string_view> *wanted = nullptr);
+
 inline std::ostream &operator<<(std::ostream &os, const RecordsMap &map) {
   for (const auto &[name, value] : map) {
     os << name << "=>" << value << ",";
